@@ -35,7 +35,7 @@ export class Motif {
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new Ctor();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.22;
+      this.master.gain.value = this.level;
       this.master.connect(this.ctx.destination);
     } catch {
       // No audio is a perfectly playable game. Never throw for a nice-to-have.
@@ -43,9 +43,18 @@ export class Motif {
     }
   }
 
+  /** Live volume, 0..1. */
+  setVolume(v: number): void {
+    this.level = Math.max(0, Math.min(1, v));
+    this.muted = this.level <= 0.001;
+    if (this.master) this.master.gain.value = this.level;
+  }
+
+  private level = 0.22;
+
   toggleMute(): boolean {
     this.muted = !this.muted;
-    if (this.master) this.master.gain.value = this.muted ? 0 : 0.22;
+    if (this.master) this.master.gain.value = this.muted ? 0 : this.level;
     return this.muted;
   }
 

@@ -48,13 +48,62 @@ async function setupWorlds(): Promise<void> {
     statusEl.textContent = 'Playing on this machine. Host a world to invite people anywhere.';
   }
 
+  // --- the lobby list
+  const lobbyBox = document.getElementById('lobbyList');
+  const listedCheck = document.getElementById('listWorld') as HTMLInputElement | null;
+
+  async function refreshLobbies(): Promise<void> {
+    if (!lobbyBox) return;
+    lobbyBox.innerHTML = '<div class="note">Looking for open worlds…</div>';
+    try {
+      const res = await fetch(`${EDGE_RELAY || ''}/lobbies`);
+      if (!res.ok) throw new Error(String(res.status));
+      const { worlds } = (await res.json()) as {
+        worlds: { code: string; name: string; players: number; molochs: number; banished: number }[];
+      };
+      if (!worlds.length) {
+        lobbyBox.innerHTML =
+          '<div class="note">No open worlds right now. Host one and tick ' +
+          '<em>list it publicly</em> and it will show up here for everyone.</div>';
+        return;
+      }
+      lobbyBox.innerHTML = '';
+      for (const w of worlds) {
+        const row = document.createElement('button');
+        row.className = 'lobbyRow';
+        row.innerHTML =
+          `<span class="lname">${escapeHtml(w.name)}</span>` +
+          `<span class="lcode">${w.code}</span>` +
+          `<span class="lmeta">${w.players} playing · ${w.molochs} moloch${w.molochs === 1 ? '' : 's'}` +
+          (w.banished ? ` · ${w.banished} unmade` : '') + '</span>';
+        row.addEventListener('click', () => { location.href = shareUrl(w.code); });
+        lobbyBox.appendChild(row);
+      }
+    } catch {
+      lobbyBox.innerHTML =
+        '<div class="note">No hosted relay is reachable, so there are no public ' +
+        'worlds to list. Local and LAN play still work.</div>';
+    }
+  }
+
+  document.getElementById('refreshLobbies')?.addEventListener('click', () => void refreshLobbies());
+  void refreshLobbies();
+
   hostBtn.addEventListener('click', async () => {
     statusEl.textContent = 'Asking the edge for a world code…';
     try {
       const res = await fetch(`${EDGE_RELAY || ''}/new`, { method: 'POST' });
       if (!res.ok) throw new Error(String(res.status));
       const { code } = (await res.json()) as { code: string };
-      location.href = shareUrl(code);
+      const url = new URL(shareUrl(code));
+      // Listing is opt-in: a link you send three friends should not appear in a
+      // public browser unless you say so.
+      if (listedCheck?.checked) {
+        url.searchParams.set('listed', '1');
+        const nm = (document.getElementById('worldName') as HTMLInputElement | null)?.value.trim();
+        if (nm) url.searchParams.set('name', nm.slice(0, 40));
+      }
+      location.href = url.toString();
     } catch {
       // The public relay is optional — self-hosting must never depend on it.
       statusEl.textContent =
@@ -71,6 +120,12 @@ async function setupWorlds(): Promise<void> {
   joinInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); joinBtn.dispatchEvent(new MouseEvent('click')); }
   });
+}
+
+/** World names are player-supplied and go into innerHTML. */
+function escapeHtml(v: string): string {
+  return v.replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
 
 export function setupGate(): void {

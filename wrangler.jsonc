@@ -18,10 +18,16 @@
   // backend — hence new_sqlite_classes rather than new_classes.
   // One object per world code.
   "durable_objects": {
-    "bindings": [{ "name": "VALLEY", "class_name": "Valley" }]
+    "bindings": [
+      { "name": "VALLEY", "class_name": "Valley" },
+      { "name": "LOBBY", "class_name": "Lobby" }
+    ]
   },
+  // Migrations are append-only and each tag is applied once. v1 shipped with
+  // Valley alone, so Lobby needs its own tag rather than an edit to v1.
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["Valley"] }
+    { "tag": "v1", "new_sqlite_classes": ["Valley"] },
+    { "tag": "v2", "new_sqlite_classes": ["Lobby"] }
   ],
 
   "observability": { "enabled": true }

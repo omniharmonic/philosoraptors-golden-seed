@@ -27,6 +27,7 @@ import { Chat } from './ui/Chat';
 import { setupGate } from './ui/gate';
 import { MiniMap } from './ui/MiniMap';
 import { RightPanel } from './ui/RightPanel';
+import { Menu, loadOptions, type GameOptions } from './ui/Menu';
 import { MolochManager } from './entities/MolochManager';
 import { HyperObject } from './entities/HyperObject';
 import { HyperState, canAlign, distanceOk, stillNeeded } from './systems/hyperstition';
@@ -888,6 +889,27 @@ function greenAt(x: number, y: number, z: number, dt: number): void {
 
 // ---------------------------------------------------------------- input
 
+/**
+ * Player options. Applied immediately rather than on a restart, because
+ * "change it, see if that helped" is the only way anyone tunes a view distance.
+ */
+let options: GameOptions = loadOptions();
+
+function applyOptions(o: GameOptions): void {
+  options = o;
+  motif.setVolume(o.muted ? 0 : o.volume);
+  world.setViewRadius(o.viewRadius);
+  const perf = document.getElementById('perf');
+  if (perf) perf.style.display = o.showFps ? '' : 'none';
+  const vig = document.getElementById('vig');
+  if (vig) vig.style.display = o.vignette ? '' : 'none';
+}
+
+const menu = new Menu(applyOptions, () => {
+  // Closing the menu hands the pointer back, after the browser's cooldown.
+  if (started) setTimeout(() => renderer.domElement.requestPointerLock(), 120);
+});
+
 setupGate();
 
 const gate = document.getElementById('gate')!;
@@ -929,7 +951,7 @@ document.addEventListener('pointerlockchange', () => {
   unlockGrace = performance.now();
   setTimeout(() => {
     if (document.pointerLockElement === renderer.domElement) return;
-    if (chat.isComposing) return;
+    if (chat.isComposing || menu.isOpen) return;
     // Still unlocked and not typing: offer a click-to-resume rather than the
     // full gate, which is heavy and hides the world.
     resumeHint.classList.add('show');
@@ -947,7 +969,7 @@ document.addEventListener('pointerlockchange', () => {
 addEventListener('mousedown', (e) => {
   if (!started || chat.isComposing) return;
   const t = e.target as HTMLElement | null;
-  if (t && t.closest('#rightPanel, #chat, #minimap, #hud, #gate')) return;
+  if (t && t.closest('#rightPanel, #chat, #minimap, #hud, #gate, #menu')) return;
   if (document.pointerLockElement !== renderer.domElement &&
       performance.now() - unlockGrace > 300) {
     renderer.domElement.requestPointerLock();
@@ -956,17 +978,21 @@ addEventListener('mousedown', (e) => {
 }, true);
 
 addEventListener('keydown', (e) => {
-  // Escape is the only thing that actually pauses.
-  if (e.code === 'Escape' && started && !chat.isComposing) {
-    gate.classList.remove('hidden');
+  if (!started || chat.isComposing) return;
+  // Escape and ? both open the in-game menu. The full entry screen is no longer
+  // the only place to read the controls, which meant reloading to check a key.
+  if (e.code === 'Escape' || e.key === '?') {
+    e.preventDefault();
+    menu.toggle();
     resumeHint.classList.remove('show');
   }
 });
 
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== renderer.domElement) return;
-  player.yaw -= e.movementX * 0.0022;
-  player.pitch -= e.movementY * 0.0022;
+  const s = 0.0022 * options.sensitivity;
+  player.yaw -= e.movementX * s;
+  player.pitch -= (options.invertY ? -e.movementY : e.movementY) * s;
   player.pitch = Math.max(-1.53, Math.min(1.53, player.pitch));
 });
 
@@ -1115,6 +1141,8 @@ if (import.meta.env.DEV) {
     get beamHint() { return beamHint; },
   };
 }
+
+applyOptions(options);
 
 requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);

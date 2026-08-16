@@ -40,6 +40,42 @@ served from, so a fork deployed to your own account works untouched.
 
 ---
 
+## The domain
+
+`philosoraptors.philosoraptors-golden-seed.workers.dev` breaks down as:
+
+| part | what it is |
+|---|---|
+| `philosoraptors` | the Worker name, from `wrangler.jsonc` |
+| `philosoraptors-golden-seed` | your account's free `workers.dev` subdomain slot |
+| `workers.dev` | **Cloudflare's** domain, not yours |
+
+You do not own a domain and nothing renews. Every Workers account gets one free
+subdomain slot. To change the middle part, go to Workers &rarr; Settings &rarr;
+Subdomain in the dashboard — it renames every worker on the account at once.
+
+To use a real domain you own, add it to Cloudflare and put a route in
+`wrangler.jsonc`:
+
+```jsonc
+"routes": [{ "pattern": "play.example.com", "custom_domain": true }]
+```
+
+Nothing in the game needs editing: the relay is same-origin, so it follows the
+page wherever it is served from.
+
+## Public worlds
+
+Hosting a world is private by default — the link is the invitation. Tick
+**list it publicly** and the world registers itself in a lobby index (a second,
+tiny Durable Object) and appears in the **Open worlds** list on the entry
+screen for everyone.
+
+Worlds push to the index on join, on leave, and about once a minute while
+occupied. Nothing polls, entries expire after five minutes of silence, and the
+cleanup happens on read — so an index nobody is looking at does no work and
+costs nothing.
+
 ## What actually happens when someone hosts a world
 
 1. The browser asks your worker for a code (`POST /new`) — six characters.

@@ -182,7 +182,13 @@ export function resolveRelay(loc: Location = location): { url: string; code: str
   const code = q.get('w');
   if (code) {
     const base = (q.get('edge') || edgeBase(loc)).replace(/^http/, 'ws');
-    return { url: `${base}/w/${encodeURIComponent(code.toUpperCase())}`, code: code.toUpperCase(), hosted: true };
+    const u = new URL(`${base}/w/${encodeURIComponent(code.toUpperCase())}`);
+    // Carried into the Durable Object so it can list itself, and named so the
+    // lobby shows something friendlier than six characters.
+    if (q.get('listed') === '1') u.searchParams.set('listed', '1');
+    const nm = q.get('name');
+    if (nm) u.searchParams.set('name', nm.slice(0, 40));
+    return { url: u.toString(), code: code.toUpperCase(), hosted: true };
   }
 
   const host = loc.hostname || 'localhost';

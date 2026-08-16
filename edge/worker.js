@@ -66,6 +66,15 @@ export class Valley extends DurableObject {
   }
 
   async fetch(request) {
+    const url = new URL(request.url);
+    // The worker passes the code through so the object can identify itself to
+    // the lobby index. A DO cannot otherwise know the name it was addressed by.
+    const code = url.searchParams.get('code');
+    const name = url.searchParams.get('name');
+    if (code) await this.ctx.storage.put('code', code);
+    if (name) await this.ctx.storage.put('name', name.slice(0, 40));
+    if (url.searchParams.get('listed') === '1') await this.ctx.storage.put('listed', true);
+
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected a WebSocket upgrade.', { status: 426 });
     }
@@ -81,6 +90,7 @@ export class Valley extends DurableObject {
     server.serializeAttachment({ id: null });
 
     await this.armTick();
+    await this.report();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -108,6 +118,28 @@ export class Valley extends DurableObject {
     this.ensureAttached();
     const id = ws.deserializeAttachment()?.id;
     if (id) leave(id);
+    await this.report();
+  }
+
+  /**
+   * Tell the lobby index we exist and how busy we are.
+   *
+   * Only listed worlds are advertised — a world created without `listed` is
+   * reachable by code and invisible, which is the right default for a link you
+   * send to three friends.
+   */
+  async report() {
+    const listed = await this.ctx.storage.get('listed');
+    if (!listed) return;
+    const code = await this.ctx.storage.get('code');
+    if (!code) return;
+    const name = (await this.ctx.storage.get('name')) || 'a valley';
+    const players = this.ctx.getWebSockets().length;
+    try {
+      await this.env.LOBBY.getByName('index').touch({
+        code, name, players, ...stats(),
+      });
+    } catch { /* the index is a convenience; never let it break a world */ }
   }
 
   async webSocketError(ws) {
@@ -137,12 +169,67 @@ export class Valley extends DurableObject {
     // which lets the object hibernate and cost nothing.
     if (players > 0 && !idle) {
       await this.ctx.storage.setAlarm(Date.now() + 1000 / HZ);
+      // Refresh the lobby entry about once a minute while anyone is here.
+      this.reportTick = (this.reportTick ?? 0) + 1;
+      if (this.reportTick % (HZ * 60) === 0) await this.report();
+    } else {
+      await this.report();
     }
   }
 
   /** Small JSON status, handy for a lobby or a health check. */
   async status() {
     return { ...stats(), sockets: this.ctx.getWebSockets().length };
+  }
+}
+
+/**
+ * The lobby index.
+ *
+ * One tiny Durable Object holding a row per listed world. Worlds push to it on
+ * join, leave and about once a minute; nothing polls, so a quiet lobby costs
+ * nothing. Entries expire on read rather than on a timer, which means an index
+ * nobody is looking at does no work at all.
+ */
+export class Lobby extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    ctx.blockConcurrencyWhile(async () => {
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS worlds (
+          code TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          players INTEGER NOT NULL,
+          molochs INTEGER NOT NULL DEFAULT 0,
+          banished INTEGER NOT NULL DEFAULT 0,
+          seen INTEGER NOT NULL
+        )
+      `);
+    });
+  }
+
+  async touch(w) {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO worlds (code, name, players, molochs, banished, seen)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(code) DO UPDATE SET
+         name = excluded.name, players = excluded.players,
+         molochs = excluded.molochs, banished = excluded.banished,
+         seen = excluded.seen`,
+      String(w.code).slice(0, 8), String(w.name).slice(0, 40),
+      w.players | 0, w.molochs | 0, w.banished | 0, Date.now(),
+    );
+  }
+
+  /** Listed worlds seen recently, busiest first. */
+  async list() {
+    // Five minutes: long enough that a world does not vanish between two
+    // players arriving, short enough that dead worlds fall off by themselves.
+    const cutoff = Date.now() - 5 * 60_000;
+    this.ctx.storage.sql.exec('DELETE FROM worlds WHERE seen < ?', cutoff - 60 * 60_000);
+    return this.ctx.storage.sql
+      .exec('SELECT code, name, players, molochs, banished, seen FROM worlds WHERE seen >= ? ORDER BY players DESC, seen DESC LIMIT 40', cutoff)
+      .toArray();
   }
 }
 
@@ -179,13 +266,23 @@ export default {
       return Response.json({ code: randomCode() }, { headers: cors });
     }
 
+    // GET /lobbies -> public worlds anyone can drop into.
+    if (url.pathname === '/lobbies') {
+      const worlds = await env.LOBBY.getByName('index').list();
+      return Response.json({ worlds }, { headers: cors });
+    }
+
     // GET /w/<CODE> with an Upgrade header -> join that world.
     const m = /^\/w\/([A-Za-z0-9]{1,8})$/.exec(url.pathname);
     if (m) {
       const code = normaliseCode(m[1]);
       const stub = env.VALLEY.getByName(code);
       if (request.headers.get('Upgrade') === 'websocket') {
-        return stub.fetch(request);
+        // Pass the code through: a Durable Object cannot otherwise learn the
+        // name it was addressed by, and it needs that to list itself.
+        const fwd = new URL(request.url);
+        fwd.searchParams.set('code', code);
+        return stub.fetch(new Request(fwd, request));
       }
       return Response.json({ code, ...(await stub.status()) }, { headers: cors });
     }

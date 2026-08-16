@@ -8,7 +8,7 @@ import type { Atlas } from '../art/atlas';
 /** How far chunks are kept resident, in chunks. */
 // 8 keeps ~289 chunks resident instead of 361 — a 20% cut in memory, meshing
 // and lighting for a view distance the fog hides anyway.
-export const VIEW_RADIUS = 8;
+export let VIEW_RADIUS = 8;
 /** Beyond this the chunk is unloaded entirely. */
 const KEEP_RADIUS = VIEW_RADIUS + 3;
 
@@ -26,6 +26,14 @@ export class World {
   /** Chunks whose light or mesh needs rebuilding, in priority order. */
   private lightQueue: Chunk[] = [];
   private meshQueue: Chunk[] = [];
+
+  /**
+   * Change how far the world streams. The single most effective knob a player
+   * has when the game runs badly, so it is adjustable live rather than at boot.
+   */
+  setViewRadius(r: number): void {
+    VIEW_RADIUS = Math.max(3, Math.min(14, Math.round(r)));
+  }
 
   constructor(seed: number, atlas: Atlas) {
     this.seed = seed;
