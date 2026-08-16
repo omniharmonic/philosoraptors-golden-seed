@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { EMBER, FLAME, FLAME_CORE, EGG_BLUE } from '../art/palette';
+import { unlit } from '../art/unlit';
 
 /**
  * The stream.
@@ -40,12 +41,10 @@ function makeTubeGeometry(): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
   const verts = (SEGMENTS + 1) * RADIAL;
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts * 3), 3));
-  // MeshBasicMaterial ignores normals, but WebGPU's node pipeline still asks for
-  // the attribute and warns once per material if it is missing. A constant
-  // buffer satisfies it at zero per-frame cost.
-  const nrm = new Float32Array(verts * 3);
-  for (let i = 0; i < verts; i++) nrm[i * 3 + 1] = 1;
-  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  // No `normal` attribute: the tube is drawn with an unlit() MeshBasicMaterial,
+  // so nothing reads one on either backend. This used to carry a constant
+  // all-up normal buffer purely to stop WebGPU's node pipeline asking for it;
+  // unlit() removes the request at its source instead.
 
   const index: number[] = [];
   for (let s = 0; s < SEGMENTS; s++) {
@@ -95,14 +94,14 @@ export class Beam {
     this.group.visible = false;
     for (let i = 0; i <= SEGMENTS; i++) this._spine.push(new THREE.Vector3());
 
-    this.tubeMat = new THREE.MeshBasicMaterial({
+    this.tubeMat = unlit(new THREE.MeshBasicMaterial({
       color: EMBER, transparent: true, opacity: 0.42,
       depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    });
-    this.coreMat = new THREE.MeshBasicMaterial({
+    }));
+    this.coreMat = unlit(new THREE.MeshBasicMaterial({
       color: FLAME_CORE, transparent: true, opacity: 0.95,
       depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    });
+    }));
 
     const tg = makeTubeGeometry();
     const cg = makeTubeGeometry();

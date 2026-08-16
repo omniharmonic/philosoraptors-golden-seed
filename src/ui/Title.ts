@@ -26,19 +26,6 @@ const esc = (v: string): string =>
   v.replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
-/** Seeds are shown to players, so make them typeable rather than 9 digits. */
-function seedFromText(text: string): number {
-  const t = text.trim();
-  if (!t) return 0;
-  if (/^-?\d+$/.test(t)) return Math.abs(Number(t)) >>> 0;
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < t.length; i++) {
-    h ^= t.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h >>> 0;
-}
-
 export class Title {
   private root: HTMLElement;
   private menu: Menu;
@@ -194,7 +181,9 @@ export class Title {
       if (!res.ok) throw new Error(String(res.status));
       const { code } = (await res.json()) as { code: string };
       location.href = this.worldUrl(code, {
-        seed: seedText ? String(seedFromText(seedText)) : undefined,
+        // Keep the word the player typed — it is readable, shareable, and the
+        // seed parser understands it directly.
+        seed: seedText || undefined,
         name: name || undefined,
         listed,
       });

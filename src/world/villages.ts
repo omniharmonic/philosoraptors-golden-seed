@@ -30,7 +30,7 @@ import { rng } from './noise';
 import { Biome, SEA_LEVEL, SLABS, frontLine, sampleColumn, terrainHeight } from './worldgen';
 import { LANDMARKS, Writer } from './landmarks';
 import {
-  AIR, CANDLE, CLAWPRINT_STONE, CROP_RIPE, DIRT, FOUNTAIN_SANDSTONE,
+  AIR, CANDLE, CLAWPRINT_STONE, CROP_RIPE, DIRT, FOUNTAIN_SANDSTONE, GRASS_WARM,
   GREEN_SHOOT, LANTERN, LAVENDER, PALE_TIMBER, PLANK, RED_TIMBER, SCRUB_OAK,
   SOIL_LIVING, SOLAR_GLASS, STRING_LIGHT, TERRACE_STONE, WARM_BRICK, WATER,
   WOVEN_MAT,
@@ -47,6 +47,78 @@ const CELL_MARGIN = 66;
 const MAX_REACH = 64;
 /** Fraction of cells that are even considered. Siting rejects most of those. */
 const CELL_DENSITY = 0.75;
+
+/**
+ * Radius the slope survey covers.
+ *
+ * This has to match what a village actually OCCUPIES. The old survey probed
+ * four points 22 blocks out, which is a third of the footprint: measured over
+ * the real reach, 31% of villages stood on ground with 25-47 blocks of relief
+ * while the gate believed it had rejected anything over 26.
+ *
+ * Set to MAX_REACH rather than a hand-picked number so it cannot drift out of
+ * step with the footprint again — a survey that is even a few blocks short is
+ * how the original bug happened.
+ */
+const SURVEY_R = MAX_REACH;
+/**
+ * Relief a settlement can terrace, measured across SURVEY_R.
+ *
+ * The relief histogram over 500 sites is bimodal, not a gradient: 65% of sites
+ * come in under 15 blocks, almost nothing lands between 15 and 25, and the rest
+ * are 25-47. That upper mode is one specific piece of ground — the abrupt range
+ * front, which rises 0.52 blocks per block. That is a 27-degree wall, not a
+ * hillside, and no amount of terracing makes it a village site.
+ *
+ * 30 across 108 blocks is a fall of 0.28, which the benches below turn into
+ * retaining walls around six blocks high. Raising it further does not break the
+ * terracing — measured at 34 the doors are still all reachable — but it starts
+ * leaving hillside standing over the roofs, and the gain is 9% more villages.
+ */
+const MAX_RELIEF = 26;
+/**
+ * Alternate sites tried inside one cell before the cell is written off.
+ *
+ * Rejecting the range front outright costs 31% of all villages and empties the
+ * whole Flatiron cell column. Re-rolling the jitter inside the same cell puts
+ * the settlement back on the buildable ground next door instead, and it is the
+ * re-roll, not a loose threshold, that pays for the strict gate: one try keeps
+ * 69% of the old village count, five keeps 85%, twenty keeps 99%. Nine cold
+ * cells — what a chunk entering fresh country pays, behind the cache — cost
+ * 0.03ms at one try and 0.08ms at twenty.
+ */
+const SITE_TRIES = 20;
+
+/** Headroom cleared above any levelled surface. Covers the tallest roof. */
+const SHELL_CLEAR = 16;
+/** Deepest cut or fill a pad will make. Siting keeps sites well inside this. */
+const MAX_CUT = 32;
+/**
+ * How far below its surface a levelled rim is packed with stone.
+ *
+ * Filling below natural ground is invisible, so a blanket depth is cheaper and
+ * more robust than working out how much of each rim ends up exposed: whatever
+ * face the slope opens up is faced in TERRACE_STONE either way.
+ */
+const WALL_DEPTH = 8;
+
+/** Fall-line spacing between terrace benches. */
+const BENCH_STEP = 24;
+/** Half depth of a bench, across the fall line. Benches abut at BENCH_STEP/2. */
+const BENCH_DEEP = 12;
+/** Contour spacing between the buildings on one bench. */
+const BENCH_LAT = 26;
+/** Benches per terrace village. 4 * BENCH_STEP / 2 = 48 blocks of reach. */
+const BENCH_ROWS = 4;
+/**
+ * Tallest retaining wall the terrace will build.
+ *
+ * Siting keeps relief under MAX_RELIEF across SURVEY_R, which bounds a bench
+ * riser to about six blocks — but the range front steepens as it goes, so a
+ * site can survey clean and still fall away under the lowest bench. The chain
+ * stops there rather than cutting a shelf at the bottom of a cliff.
+ */
+const MAX_RISER = 10;
 
 /**
  * Positional hash in [0,1).
@@ -103,12 +175,48 @@ export interface VillagePlot {
   /** true = beds run along X, false = along Z. */
   alongX: boolean;
   key: number;
+  /**
+   * Level to grow at, when the plot sits on a bench that has already been cut
+   * flat. Undefined means the beds terrace themselves off natural ground.
+   */
+  y?: number;
 }
 
 export interface VillagePost {
   x: number;
   z: number;
   h: number;
+  /**
+   * Surface the post stands on. Carried in the descriptor rather than sampled
+   * at build time, because a post on a bench stands on the CUT level and the
+   * terrain function underneath it says something else entirely.
+   */
+  y: number;
+}
+
+/**
+ * One cut-and-fill shelf of a terrace village.
+ *
+ * Benches abut along the fall line, so the downhill rim of one is the wall the
+ * next one looks up at. That rim is what makes the terracing read as built.
+ */
+export interface VillageBench {
+  x: number;
+  z: number;
+  hw: number;
+  hd: number;
+  y: number;
+}
+
+/** A flight of steps cut into a bench, joining it to the one above. */
+export interface VillageStair {
+  x: number;
+  z: number;
+  /** Unit vector pointing downhill; exactly one component is non-zero. */
+  dx: number;
+  dz: number;
+  yTop: number;
+  yBot: number;
 }
 
 export interface Village {
@@ -131,6 +239,10 @@ export interface Village {
   trim: number;
   buildings: VillageBuilding[];
   plots: VillagePlot[];
+  /** Cut shelves, uphill first. Empty unless the layout is 'terrace'. */
+  benches: VillageBench[];
+  /** Steps between consecutive benches. Empty unless the layout is 'terrace'. */
+  stairs: VillageStair[];
   /** Lamp posts. Consecutive entries are strung with lights. */
   posts: VillagePost[];
   /** The fountain or well. Every settlement is built around drawn water. */
@@ -189,6 +301,33 @@ function underSlab(x: number, z: number, seed: number): boolean {
   return false;
 }
 
+/**
+ * Relief across the ground a village would actually stand on.
+ *
+ * Three rings of eight probes out to SURVEY_R, for 25 terrainHeight() calls
+ * instead of ~1800 — this runs on the chunk-streaming path, once per cell,
+ * behind the cache.
+ *
+ * It UNDER-READS, by 0.41 blocks on average and 8.7 at worst when measured
+ * against a full 2-block grid over 500 accepted sites. MAX_RELIEF is set below
+ * what the terracing can handle by more than that worst case, so a site that
+ * surveys clean is genuinely buildable rather than merely probably buildable.
+ */
+function surveyRelief(x: number, z: number, seed: number): number {
+  let lo = terrainHeight(x, z, seed);
+  let hi = lo;
+  for (let ring = 1; ring <= 3; ring++) {
+    const rr = (SURVEY_R * ring) / 3;
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const h = terrainHeight(x + Math.cos(a) * rr, z + Math.sin(a) * rr, seed);
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+  }
+  return hi - lo;
+}
+
 /** Landmarks own their ground; villages keep a generous berth. */
 function nearLandmark(x: number, z: number): boolean {
   for (const lm of LANDMARKS) {
@@ -226,27 +365,34 @@ export function villageAt(cellX: number, cellZ: number, seed: number): Village |
   const nameHash = (h2(cellX * 3 + 1, cellZ * 5 + 7, seed + 0x71d) * 0x100000000) >>> 0;
   const r = rng(Math.imul(cellX, 0x27d4eb2d) ^ Math.imul(cellZ, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1));
 
+  // Site the settlement. A cell gets several attempts rather than one, because
+  // the cells that fail are the ones sitting against the range front, and the
+  // buildable bench is usually only a few dozen blocks away inside the same
+  // cell.
   const span = CELL - CELL_MARGIN * 2;
-  const cx = Math.round(cellX * CELL + CELL_MARGIN + r() * span);
-  const cz = Math.round(cellZ * CELL + CELL_MARGIN + r() * span);
-
-  const site = sampleColumn(cx, cz, seed);
-  if (!liveable(site.biome)) return remember(key, null);
-  if (site.height < SEA_LEVEL + 3) return remember(key, null);
-  if (nearLandmark(cx, cz) || underSlab(cx, cz, seed)) return remember(key, null);
-
-  // Slope survey: four probes across the footprint. A village needs ground it
-  // can terrace, not a cliff.
-  const y0 = terrainHeight(cx, cz, seed);
-  let lo = y0;
-  let hi = y0;
-  for (const [dx, dz] of [[-22, 0], [22, 0], [0, -22], [0, 22]]) {
-    const yy = terrainHeight(cx + dx, cz + dz, seed);
-    if (yy < lo) lo = yy;
-    if (yy > hi) hi = yy;
+  let cx = 0;
+  let cz = 0;
+  let relief = 0;
+  let sited = false;
+  for (let attempt = 0; attempt < SITE_TRIES; attempt++) {
+    const px = Math.round(cellX * CELL + CELL_MARGIN + r() * span);
+    const pz = Math.round(cellZ * CELL + CELL_MARGIN + r() * span);
+    const site = sampleColumn(px, pz, seed);
+    if (!liveable(site.biome)) continue;
+    if (site.height < SEA_LEVEL + 3) continue;
+    if (nearLandmark(px, pz) || underSlab(px, pz, seed)) continue;
+    // Survey last: it is the only expensive test in the list.
+    const rel = surveyRelief(px, pz, seed);
+    if (rel > MAX_RELIEF) continue;
+    cx = px;
+    cz = pz;
+    relief = rel;
+    sited = true;
+    break;
   }
-  const relief = hi - lo;
-  if (relief > 26) return remember(key, null);
+  if (!sited) return remember(key, null);
+
+  const y0 = terrainHeight(cx, cz, seed);
 
   const v: Village = {
     cellX,
@@ -262,6 +408,8 @@ export function villageAt(cellX: number, cellZ: number, seed: number): Village |
     trim: r() < 0.68 ? PALE_TIMBER : RED_TIMBER,
     buildings: [],
     plots: [],
+    benches: [],
+    stairs: [],
     posts: [],
     // Overwritten by layoutVillage once it knows where the open ground is.
     water: { x: cx, z: cz, y: Math.floor(y0), fountain: false },
@@ -281,6 +429,11 @@ export function villageAt(cellX: number, cellZ: number, seed: number): Village |
   }
   for (const p of v.posts) {
     reach = Math.max(reach, Math.abs(p.x - cx) + 2, Math.abs(p.z - cz) + 2);
+  }
+  // Benches are levelled ground, so they have to be inside the AABB or a chunk
+  // holding nothing but shelf would never be told to cut it.
+  for (const b of v.benches) {
+    reach = Math.max(reach, Math.abs(b.x - cx) + b.hw + 2, Math.abs(b.z - cz) + b.hd + 2);
   }
   const wr = waterPad(v) + 2;
   reach = Math.max(reach, Math.abs(v.water.x - cx) + wr, Math.abs(v.water.z - cz) + wr);
@@ -336,13 +489,17 @@ function faceToward(bx: number, bz: number, tx: number, tz: number): Facing {
 function pushBuilding(
   v: Village, x: number, z: number, spec: PlanSpec,
   facing: Facing, r: () => number, wallStock: number, seed: number,
-): void {
+  level?: number,
+): boolean {
   const rect: Rect = { x, z, hw: spec.hw, hd: spec.hd };
-  for (const b of v.buildings) if (overlaps(rect, b, 4)) return;
+  for (const b of v.buildings) if (overlaps(rect, b, 4)) return false;
 
-  const y = Math.floor(terrainHeight(x, z, seed));
+  // On a terrace the floor is the bench level, not the ground under the middle
+  // of the footprint: the whole point of cutting a shelf is that every building
+  // on it shares one datum.
+  const y = level ?? Math.floor(terrainHeight(x, z, seed));
   // Leave headroom for the tallest roof this plan can grow.
-  if (y < SEA_LEVEL + 2 || y > CY - 28) return;
+  if (y < SEA_LEVEL + 2 || y > CY - 28) return false;
 
   const glass = spec.plan === 4;
   v.buildings.push({
@@ -356,18 +513,19 @@ function pushBuilding(
     pitch: spec.plan === 1 ? 0.5 : r() < 0.4 ? 0.6 : 1,
     key: Math.floor(r() * 0xffff),
   });
+  return true;
 }
 
 function pushPlot(
   v: Village, x: number, z: number, hw: number, hd: number,
-  alongX: boolean, r: () => number,
+  alongX: boolean, r: () => number, level?: number,
 ): void {
   const rect: Rect = { x, z, hw, hd };
   // 3 is the minimum that clears both margins: a building pad runs two blocks
   // past its walls and a plot kerb one block past its beds.
   for (const b of v.buildings) if (overlaps(rect, b, 3)) return;
   for (const p of v.plots) if (overlaps(rect, p, 2)) return;
-  v.plots.push({ x, z, hw, hd, alongX, key: Math.floor(r() * 0xffff) });
+  v.plots.push({ x, z, hw, hd, alongX, key: Math.floor(r() * 0xffff), y: level });
 }
 
 function layoutVillage(v: Village, r: () => number, wallStock: number, seed: number): void {
@@ -398,11 +556,9 @@ function layoutVillage(v: Village, r: () => number, wallStock: number, seed: num
     }
     for (let i = 0; i < 10; i++) {
       const a = (i / 10) * Math.PI * 2;
-      v.posts.push({
-        x: Math.round(v.x + Math.cos(a) * 10),
-        z: Math.round(v.z + Math.sin(a) * 10),
-        h: 4,
-      });
+      const px = Math.round(v.x + Math.cos(a) * 10);
+      const pz = Math.round(v.z + Math.sin(a) * 10);
+      v.posts.push({ x: px, z: pz, h: 4, y: Math.floor(terrainHeight(px, pz, seed)) });
     }
     v.water = { x: v.x, z: v.z, y: v.y, fountain: true };
     return;
@@ -437,11 +593,9 @@ function layoutVillage(v: Village, r: () => number, wallStock: number, seed: num
       );
     }
     for (let i = -4; i <= 4; i++) {
-      v.posts.push({
-        x: Math.round(v.x + (alongX ? i * 7 : 4)),
-        z: Math.round(v.z + (alongX ? 4 : i * 7)),
-        h: 4,
-      });
+      const px = Math.round(v.x + (alongX ? i * 7 : 4));
+      const pz = Math.round(v.z + (alongX ? 4 : i * 7));
+      v.posts.push({ x: px, z: pz, h: 4, y: Math.floor(terrainHeight(px, pz, seed)) });
     }
     // The well head stands in the middle of the street, where both rows of
     // frontage can reach it.
@@ -452,66 +606,134 @@ function layoutVillage(v: Village, r: () => number, wallStock: number, seed: num
   // ---- terrace: read the fall line and step the village down it.
   const gx = terrainHeight(v.x + 16, v.z, seed) - terrainHeight(v.x - 16, v.z, seed);
   const gz = terrainHeight(v.x, v.z + 16, seed) - terrainHeight(v.x, v.z - 16, seed);
-  // Downhill snapped to an axis, so the terraces read as clean cut steps.
-  const downX = Math.abs(gx) >= Math.abs(gz) ? (gx > 0 ? 1 : -1) : 0;
-  const downZ = downX === 0 ? (gz > 0 ? 1 : -1) : 0;
+  // Downhill is the direction the ground FALLS in. gx is the height gained
+  // walking east, so gx > 0 means east is UPHILL and downhill is -X. Getting
+  // this backwards sent every terrace village marching up its own slope and
+  // turned every front door into the bank behind it; snapping to an axis is
+  // what keeps the benches reading as cut steps rather than a ramp.
+  const downX = Math.abs(gx) >= Math.abs(gz) ? (gx > 0 ? -1 : 1) : 0;
+  const downZ = downX === 0 ? (gz > 0 ? -1 : 1) : 0;
   const acrossX = downZ;
   const acrossZ = downX;
+  // Everything on a terrace is described by its extent ACROSS the fall line and
+  // its extent ALONG the contour; these two put that on the right world axis.
+  const fallIsX = downX !== 0;
+  const xOf = (fall: number, lat: number) => (fallIsX ? fall : lat);
+  const zOf = (fall: number, lat: number) => (fallIsX ? lat : fall);
 
   let placed = 0;
-  for (let step = 0; placed < n && step < 4; step++) {
-    // 17 apart on the fall line: any two footprints reach at most 6 each once
-    // they are turned side-on below, so this is the tightest spacing that still
-    // leaves a bench to walk and garden on between rows.
-    const depth = step * 17;
+  for (let step = 0; step < BENCH_ROWS && placed < n; step++) {
+    // Benches straddle the centre so the village sits ON its own site rather
+    // than trailing off downhill from it: 4 rows at 24 reach 48 either way,
+    // which is exactly what the siting survey measured.
+    const depth = (step - (BENCH_ROWS - 1) / 2) * BENCH_STEP;
+    const bx = Math.round(v.x + downX * depth);
+    const bz = Math.round(v.z + downZ * depth);
+    const by = Math.floor(terrainHeight(bx, bz, seed));
+    if (by < SEA_LEVEL + 2 || by > CY - 28) break;
+    const above = v.benches[v.benches.length - 1];
+    if (above && above.y - by > MAX_RISER) break;
+
+    // The top bench carries the one communal building; the rest carry a row.
     const perRow = step === 0 ? 1 : 3;
+    let maxLat = 0;
+    let any = false;
     for (let k = 0; k < perRow && placed < n; k++) {
       const spec = planFor(placed, r);
       // On a slope a building runs ALONG the contour: long axis across the fall
       // line. That is how hillside building actually works, and it is also what
-      // keeps consecutive terraces far enough apart to garden between.
+      // keeps the row short enough for three of them to share a bench.
       const short = Math.min(spec.hw, spec.hd);
       const long = Math.max(spec.hw, spec.hd);
-      spec.hw = downX !== 0 ? short : long;
-      spec.hd = downX !== 0 ? long : short;
+      spec.hw = xOf(short, long);
+      spec.hd = zOf(short, long);
 
-      const lat = (k - (perRow - 1) / 2) * 22;
-      pushBuilding(
+      const lat = (k - (perRow - 1) / 2) * BENCH_LAT;
+      // Sit the shell against the uphill rim so the bench in front of the door
+      // stays open. Without the shift the pad fills the shelf and the doorway
+      // opens straight onto the retaining wall.
+      const set = depth - 4;
+      const ok = pushBuilding(
         v,
-        Math.round(v.x + downX * depth + acrossX * lat),
-        Math.round(v.z + downZ * depth + acrossZ * lat),
+        Math.round(v.x + downX * set + acrossX * lat),
+        Math.round(v.z + downZ * set + acrossZ * lat),
         spec,
         downX !== 0 ? (downX > 0 ? 3 : 2) : (downZ > 0 ? 1 : 0),
-        r, wallStock, seed,
+        r, wallStock, seed, by,
       );
       placed++;
+      if (!ok) continue;
+      any = true;
+      maxLat = Math.max(maxLat, Math.abs(lat) + Math.max(spec.hw, spec.hd) + 3);
     }
-    // Kitchen beds on the flanks of each bench, long axis along the contour.
-    for (const flank of [-42, 42]) {
-      pushPlot(
-        v,
-        Math.round(v.x + downX * depth + acrossX * flank),
-        Math.round(v.z + downZ * depth + acrossZ * flank),
-        downX !== 0 ? 3 : 8,
-        downX !== 0 ? 8 : 3,
-        downZ !== 0,
-        r,
-      );
+    if (!any) continue;
+
+    // The bench also has to carry the lamp row out to lat 20, and on the top
+    // bench the well head at lat 22. 38 is the widest that still leaves the
+    // whole village inside MAX_REACH.
+    if (step === 0) maxLat = Math.max(maxLat, 27);
+    const hw = Math.min(38, Math.max(22, maxLat));
+    v.benches.push({
+      x: bx, z: bz,
+      hw: xOf(BENCH_DEEP, hw),
+      hd: zOf(BENCH_DEEP, hw),
+      y: by,
+    });
+
+    // Kitchen beds fill the open strip in front of the doors, level with the
+    // bench. House row, garden, retaining wall — that is the whole terrace.
+    const plotLat = hw - 3;
+    pushPlot(
+      v,
+      Math.round(v.x + downX * (depth + 9) + acrossX * 0),
+      Math.round(v.z + downZ * (depth + 9) + acrossZ * 0),
+      xOf(2, plotLat), zOf(2, plotLat),
+      downZ !== 0, r, by,
+    );
+
+    // Lamps along the front of the bench, close enough to string together.
+    // Offset off the bay centres: buildings sit on multiples of BENCH_LAT and
+    // their doors open straight down the fall line, so a post on a bay centre
+    // stands in a doorway. 6 clear of the nearest one is as far as the 13-block
+    // string spacing allows.
+    for (let k = -2; k <= 1; k++) {
+      const lat = k * 13 + 7;
+      v.posts.push({
+        x: Math.round(v.x + downX * (depth + 6) + acrossX * lat),
+        z: Math.round(v.z + downZ * (depth + 6) + acrossZ * lat),
+        h: 4,
+        y: by,
+      });
     }
   }
-  // Lamps down the bench edge, between the middle house and the east row.
-  for (let i = 0; i < 8; i++) {
-    v.posts.push({
-      x: Math.round(v.x + downX * i * 8 + acrossX * 12),
-      z: Math.round(v.z + downZ * i * 8 + acrossZ * 12),
-      h: 4,
+
+  // Steps down each retaining wall, cut into the bench below and kept clear of
+  // both building rows by sitting in the gap between them.
+  for (let i = 1; i < v.benches.length; i++) {
+    const up = v.benches[i - 1];
+    const lo = v.benches[i];
+    if (lo.y >= up.y) continue;
+    const edge = (fallIsX ? up.hw : up.hd) + 1;
+    v.stairs.push({
+      x: Math.round(up.x + downX * edge + acrossX * 13),
+      z: Math.round(up.z + downZ * edge + acrossZ * 13),
+      dx: downX,
+      dz: downZ,
+      yTop: up.y,
+      yBot: lo.y,
     });
   }
-  // The top bench carries only one building, so the well goes on its flank
-  // where the whole village can walk uphill to it.
-  const wx = Math.round(v.x + acrossX * 22);
-  const wz = Math.round(v.z + acrossZ * 22);
-  v.water = { x: wx, z: wz, y: Math.floor(terrainHeight(wx, wz, seed)), fountain: false };
+
+  const top = v.benches[0];
+  if (top) {
+    const wx = Math.round(top.x + acrossX * 22);
+    const wz = Math.round(top.z + acrossZ * 22);
+    v.water = { x: wx, z: wz, y: top.y, fountain: false };
+  } else {
+    const wx = Math.round(v.x + acrossX * 22);
+    const wz = Math.round(v.z + acrossZ * 22);
+    v.water = { x: wx, z: wz, y: Math.floor(terrainHeight(wx, wz, seed)), fountain: false };
+  }
 }
 
 // -------------------------------------------------------------- build context
@@ -550,21 +772,58 @@ class Site {
 }
 
 /**
- * Flatten a rectangular pad to `y` and weld it into the slope beneath.
+ * Cut and fill a rectangle to `y`, and face the exposed edge in stone.
  *
  * Writer.pad() is a disc that only reaches six blocks down, which leaves a
- * floating shelf on exactly the kind of benched ground villages sit on.
+ * floating shelf on exactly the kind of benched ground villages sit on. This
+ * differs from the old rectangular version in two ways that matter on a slope:
+ *
+ *  - the RIM is packed with `rim` stone rather than dirt, down past whatever
+ *    the fall line exposes, so a pad on a slope shows a retaining wall instead
+ *    of a raw dirt scarp. Packing below natural ground is invisible, so a
+ *    blanket depth is cheaper than working out the exposed height per column.
+ *  - the clear reaches `g + 16` as well as `y + SHELL_CLEAR`, so a cut never
+ *    leaves the hillside — or the ponderosa rooted on it, placeTrees having run
+ *    long before this — standing over the roof it was cut for.
  */
 function padRect(
-  s: Site, cx: number, cz: number, hw: number, hd: number, y: number, top: number,
+  s: Site, cx: number, cz: number, hw: number, hd: number, y: number,
+  top: number, rimTop = top, rimFill = TERRACE_STONE,
 ): void {
   for (let z = s.loZ(cz - hd); z <= s.hiZ(cz + hd); z++) {
     for (let x = s.loX(cx - hw); x <= s.hiX(cx + hw); x++) {
       const g = s.w.ground(x, z);
-      s.w.set(x, y, z, top);
-      const base = Math.max(y - 24, Math.min(y - 1, g - 1));
-      for (let yy = base; yy < y; yy++) s.w.set(x, yy, z, DIRT);
-      for (let yy = y + 1; yy <= y + 14; yy++) s.w.set(x, yy, z, AIR);
+      const rim = x === cx - hw || x === cx + hw || z === cz - hd || z === cz + hd;
+      s.w.set(x, y, z, rim ? rimTop : top);
+      const want = rim ? Math.min(y - WALL_DEPTH, g - 1) : Math.min(y - 1, g - 1);
+      const base = Math.max(y - MAX_CUT, want);
+      for (let yy = base; yy < y; yy++) s.w.set(x, yy, z, rim ? rimFill : DIRT);
+      const clearTo = Math.max(y + SHELL_CLEAR, Math.min(g + 16, y + MAX_CUT + 16));
+      for (let yy = y + 1; yy <= clearTo; yy++) s.w.set(x, yy, z, AIR);
+    }
+  }
+}
+
+/**
+ * Face the cut bank standing just outside a levelled rectangle.
+ *
+ * The pad stops at its own edge, so on the uphill side the untouched hillside
+ * stands beside it as a bare dirt wall up to six blocks tall. One ring of
+ * TERRACE_STONE turns that into the revetment a cut terrace actually has.
+ */
+function revetCut(
+  s: Site, v: Village, cx: number, cz: number, hw: number, hd: number, y: number,
+): void {
+  if (!s.hitsRect(cx, cz, hw + 1, hd + 1)) return;
+  for (let z = s.loZ(cz - hd - 1); z <= s.hiZ(cz + hd + 1); z++) {
+    for (let x = s.loX(cx - hw - 1); x <= s.hiX(cx + hw + 1); x++) {
+      if (Math.abs(x - cx) <= hw && Math.abs(z - cz) <= hd) continue;
+      // Another shelf may already own this column at a different level; its
+      // surface must win or the revetment grows out of the middle of a bench.
+      if (onLevelled(v, x, z)) continue;
+      const g = s.w.ground(x, z);
+      const face = Math.min(g, y + MAX_CUT);
+      for (let yy = y + 1; yy <= face; yy++) s.w.set(x, yy, z, TERRACE_STONE);
     }
   }
 }
@@ -579,13 +838,97 @@ function onPad(v: Village, x: number, z: number): boolean {
   return false;
 }
 
+/** onPad, plus the terrace benches. Anything that cuts terrain must respect it. */
+function onLevelled(v: Village, x: number, z: number): boolean {
+  for (const b of v.benches) {
+    if (Math.abs(b.x - x) <= b.hw && Math.abs(b.z - z) <= b.hd) return true;
+  }
+  return onPad(v, x, z);
+}
+
+/** Cut one terrace bench: grass shelf, stone rim, stone wall down the fall. */
+function buildBench(s: Site, b: VillageBench): void {
+  if (!s.hitsRect(b.x, b.z, b.hw, b.hd)) return;
+  padRect(s, b.x, b.z, b.hw, b.hd, b.y, GRASS_WARM, TERRACE_STONE);
+}
+
+/**
+ * Steps down a retaining wall.
+ *
+ * One tread per block of drop, cut into the LOWER bench, so the flight lands on
+ * a surface that is already level instead of on the slope it replaced.
+ */
+function buildStair(s: Site, st: VillageStair): void {
+  const drop = st.yTop - st.yBot;
+  if (drop <= 0) return;
+  // Tangent along the wall: the flight is three blocks wide.
+  const tx = st.dz;
+  const tz = st.dx;
+  if (!s.hitsRect(
+    st.x + (st.dx * drop) / 2, st.z + (st.dz * drop) / 2,
+    Math.abs(st.dx) * drop + 2, Math.abs(st.dz) * drop + 2,
+  )) return;
+
+  for (let k = 0; k < drop; k++) {
+    const level = st.yTop - 1 - k;
+    const px = st.x + st.dx * k;
+    const pz = st.z + st.dz * k;
+    for (let t = -1; t <= 1; t++) {
+      const x = px + tx * t;
+      const z = pz + tz * t;
+      if (x < s.x0 || x > s.x1 || z < s.z0 || z > s.z1) continue;
+      s.w.set(x, level, z, TERRACE_STONE);
+      for (let yy = Math.max(0, st.yBot - 1); yy < level; yy++) {
+        s.w.set(x, yy, z, TERRACE_STONE);
+      }
+      for (let yy = level + 1; yy <= st.yTop + SHELL_CLEAR; yy++) s.w.set(x, yy, z, AIR);
+    }
+  }
+}
+
+/**
+ * Steps from a doorstep down (or up) to natural ground.
+ *
+ * A pad on rolling ground leaves a step of up to six blocks between its rim and
+ * the path that runs to it, which is simply not walkable. The flight stops the
+ * moment it meets another levelled surface, which is why a terrace building
+ * gets none: the bench in front of its door is already its own floor level.
+ */
+function doorSteps(s: Site, v: Village, b: VillageBuilding): void {
+  const nx = b.facing === 2 ? -1 : b.facing === 3 ? 1 : 0;
+  const nz = b.facing === 0 ? -1 : b.facing === 1 ? 1 : 0;
+  const tx = nz;
+  const tz = nx;
+  let level = b.y;
+
+  for (let step = 1; step <= 12; step++) {
+    const px = b.x + nx * (b.hw + 2 + step);
+    const pz = b.z + nz * (b.hd + 2 + step);
+    if (onLevelled(v, px, pz)) return;
+    const g = s.w.ground(px, pz);
+    if (level === g) return;
+    level += level > g ? -1 : 1;
+    for (let t = -1; t <= 1; t++) {
+      const x = px + tx * t;
+      const z = pz + tz * t;
+      if (x < s.x0 || x > s.x1 || z < s.z0 || z > s.z1) continue;
+      s.w.set(x, level, z, TERRACE_STONE);
+      const base = Math.max(0, level - WALL_DEPTH);
+      for (let yy = base; yy < level; yy++) s.w.set(x, yy, z, TERRACE_STONE);
+      const clearTo = Math.max(level + 6, Math.min(g + 2, level + MAX_CUT));
+      for (let yy = level + 1; yy <= clearTo; yy++) s.w.set(x, yy, z, AIR);
+    }
+  }
+}
+
 /**
  * A terrain-following ribbon of paving, with headroom cleared above it.
  *
- * Cells already claimed by a pad are skipped: a path cuts its headroom at
- * natural terrain level, so running one across a flattened pad would saw a
- * trench through the fill holding that pad up. The pad is paved in the same
- * stone anyway, so the route still reads as continuous.
+ * Cells already claimed by a pad or a bench are skipped: a path cuts its
+ * headroom at natural terrain level, so running one across flattened ground
+ * would saw a trench through the fill holding that ground up. A pad is paved in
+ * the same stone anyway, and a bench IS the route, so a skipped cell never
+ * breaks the read.
  */
 function path(
   s: Site, v: Village, x0: number, z0: number, x1: number, z1: number, half: number,
@@ -603,7 +946,7 @@ function path(
     const pz = Math.round(z0 + (z1 - z0) * t);
     for (let z = s.loZ(pz - half); z <= s.hiZ(pz + half); z++) {
       for (let x = s.loX(px - half); x <= s.hiX(px + half); x++) {
-        if (onPad(v, x, z)) continue;
+        if (onLevelled(v, x, z)) continue;
         const g = s.w.ground(x, z);
         // Prints signed into the paving — Ep3b, "wherever a print lands".
         s.w.set(x, g, z, h2(x, z, s.seed + 4404) > 0.86 ? CLAWPRINT_STONE : TERRACE_STONE);
@@ -857,54 +1200,67 @@ function buildWell(s: Site, x: number, z: number, y: number): void {
   s.w.set(x, y + 3, z, LANTERN);
 }
 
-/** Terraced kitchen beds in bands of colour. */
+/**
+ * Terraced kitchen beds in bands of colour.
+ *
+ * Each band takes one level, which is what terraces a plot on a slope without
+ * the plot needing to know the slope direction. Two things make that survive on
+ * real ground: the soil is carried on a TERRACE_STONE riser packed down to
+ * natural grade, so a band running out over a fall does not hang in the air;
+ * and a column where the hillside has climbed more than a block above the band
+ * is left alone rather than trenched, so a bed meets a bank instead of
+ * disappearing into it.
+ */
 function buildPlot(s: Site, p: VillagePlot, accent: number, seed: number): void {
   if (!s.hitsRect(p.x, p.z, p.hw + 2, p.hd + 2)) return;
 
   const bands = p.alongX ? p.hd : p.hw;
   const runHalf = p.alongX ? p.hw : p.hd;
 
-  for (let band = -bands; band <= bands; band++) {
-    // Each band takes its level from its own centre, which is what terraces a
-    // plot on a slope without the plot needing to know the slope direction.
-    const bx = p.alongX ? p.x : p.x + band;
-    const bz = p.alongX ? p.z + band : p.z;
+  // One band past each end is the kerb, so it sits at the level of the bed it
+  // edges rather than on whatever the untouched ground happens to be doing.
+  for (let band = -bands - 1; band <= bands + 1; band++) {
+    const inner = Math.max(-bands, Math.min(bands, band));
+    const bx = p.alongX ? p.x : p.x + inner;
+    const bz = p.alongX ? p.z + inner : p.z;
+    const cx = p.alongX ? p.x : p.x + band;
+    const cz = p.alongX ? p.z + band : p.z;
     if (!s.hits(
-      p.alongX ? p.x - runHalf : bx, p.alongX ? bz : p.z - runHalf,
-      p.alongX ? p.x + runHalf : bx, p.alongX ? bz : p.z + runHalf,
+      p.alongX ? p.x - runHalf - 1 : cx, p.alongX ? cz : p.z - runHalf - 1,
+      p.alongX ? p.x + runHalf + 1 : cx, p.alongX ? cz : p.z + runHalf + 1,
     )) continue;
 
-    const by = s.w.ground(bx, bz);
-    const lo = p.alongX ? s.loX(p.x - runHalf) : s.loZ(p.z - runHalf);
-    const hi = p.alongX ? s.hiX(p.x + runHalf) : s.hiZ(p.z + runHalf);
+    // A plot on a bench shares the bench's datum; anywhere else each band
+    // levels itself off the ground under its own centre line.
+    const by = p.y ?? s.w.ground(bx, bz);
+    const lo = p.alongX ? s.loX(p.x - runHalf - 1) : s.loZ(p.z - runHalf - 1);
+    const hi = p.alongX ? s.hiX(p.x + runHalf + 1) : s.hiZ(p.z + runHalf + 1);
 
     for (let t = lo; t <= hi; t++) {
-      const x = p.alongX ? t : bx;
-      const z = p.alongX ? bz : t;
-      s.w.set(x, by, z, SOIL_LIVING);
-      s.w.set(x, by - 1, z, TERRACE_STONE);
+      const x = p.alongX ? t : cx;
+      const z = p.alongX ? cz : t;
+      const run = p.alongX ? t - p.x : t - p.z;
+      const kerb = Math.abs(band) > bands || Math.abs(run) > runHalf;
+      const g = s.w.ground(x, z);
+      // Where the hill has risen clear of the bed, stop: the plot has run into
+      // a bank and cutting it in would leave a garden at the bottom of a slot.
+      // A bench plot is exempt — the shelf under it has already been cut to
+      // `by`, and terrainHeight() still describes the hillside that was there.
+      if (p.y === undefined && g > by + 2) continue;
+
+      s.w.set(x, by, z, kerb ? TERRACE_STONE : SOIL_LIVING);
+      // Riser under the bed, down to grade. Below grade it is invisible.
+      const base = Math.max(by - MAX_CUT, Math.min(by - 1, g - 1));
+      for (let yy = base; yy < by; yy++) s.w.set(x, yy, z, TERRACE_STONE);
       // Same reason as the paths: clear a whole tree's worth or the garden
       // grows under a floating canopy.
       for (let h = 1; h <= 14; h++) s.w.set(x, by + h, z, AIR);
+      if (kerb) continue;
 
       const kind = ((band % 3) + 3) % 3;
       if (kind === 0) s.w.set(x, by + 1, z, CROP_RIPE);
       else if (kind === 1) s.w.set(x, by + 1, z, accent);
       else if (h2(x, z, seed + p.key) > 0.45) s.w.set(x, by + 1, z, GREEN_SHOOT);
-    }
-  }
-
-  // Stone kerb, so a plot reads as built rather than spilled.
-  for (let x = s.loX(p.x - p.hw - 1); x <= s.hiX(p.x + p.hw + 1); x++) {
-    for (const z of [p.z - p.hd - 1, p.z + p.hd + 1]) {
-      if (z < s.z0 || z > s.z1) continue;
-      s.w.set(x, s.w.ground(x, z), z, TERRACE_STONE);
-    }
-  }
-  for (let z = s.loZ(p.z - p.hd - 1); z <= s.hiZ(p.z + p.hd + 1); z++) {
-    for (const x of [p.x - p.hw - 1, p.x + p.hw + 1]) {
-      if (x < s.x0 || x > s.x1) continue;
-      s.w.set(x, s.w.ground(x, z), z, TERRACE_STONE);
     }
   }
 }
@@ -915,9 +1271,9 @@ function buildLights(s: Site, v: Village): void {
   for (let i = 0; i < posts.length; i++) {
     const p = posts[i];
     if (s.hitsRect(p.x, p.z, 1, 1) && !onPad(v, p.x, p.z)) {
-      const g = s.w.ground(p.x, p.z);
-      for (let h = 0; h < p.h; h++) s.w.set(p.x, g + h, p.z, v.trim);
-      s.w.set(p.x, g + p.h, p.z, LANTERN);
+      // p.y, not the terrain: a post on a bench stands on the cut level.
+      for (let h = 0; h < p.h; h++) s.w.set(p.x, p.y + h, p.z, v.trim);
+      s.w.set(p.x, p.y + p.h, p.z, LANTERN);
     }
 
     // A line is not a loop: only the commons ring closes back on itself.
@@ -937,7 +1293,10 @@ function buildLights(s: Site, v: Village): void {
       if (lx < s.x0 || lx > s.x1 || lz < s.z0 || lz > s.z1) continue;
       if (onPad(v, lx, lz)) continue;
       // Catenary sag: the middle of a span hangs a block lower than its posts.
-      s.w.set(lx, s.w.ground(lx, lz) + p.h - (Math.abs(t - 0.5) < 0.28 ? 1 : 0), lz, STRING_LIGHT);
+      // The span interpolates between the two post TOPS, so a string across a
+      // stepped bench stays a straight run instead of following the ground.
+      const ly = Math.round(p.y + (q.y - p.y) * t) + p.h;
+      s.w.set(lx, ly - (Math.abs(t - 0.5) < 0.28 ? 1 : 0), lz, STRING_LIGHT);
     }
   }
 }
@@ -979,13 +1338,25 @@ function buildVillage(chunk: Chunk, v: Village, seed: number): void {
   const oz = chunk.cz * CZ;
   const s = new Site(new Writer(chunk, ox, oz, seed), ox, oz, seed);
 
-  // Order matters. Pads clear the air above them, so everything that stands up
-  // — plants, posts, lights, furniture — has to be written after every pad is
-  // already down, including pads belonging to neighbouring buildings.
+  // Order matters. Levelling clears the air above it, so everything that stands
+  // up — plants, posts, lights, furniture — has to be written after every pad
+  // is already down, including pads belonging to neighbouring buildings.
+  //
+  // Benches go first and DOWNHILL FIRST, so where two abut, the upper bench's
+  // rim wins the shared column: that column is the retaining wall the lower
+  // bench looks up at, and it has to be packed to the upper level.
+  for (let i = v.benches.length - 1; i >= 0; i--) buildBench(s, v.benches[i]);
+  for (const st of v.stairs) buildStair(s, st);
+
   for (const b of v.buildings) {
     if (!s.hitsRect(b.x, b.z, b.hw + 3, b.hd + 3)) continue;
     padRect(s, b.x, b.z, b.hw + 2, b.hd + 2, b.y, TERRACE_STONE);
   }
+  // Revet the cut banks only once every pad exists, so a bank shared with a
+  // neighbouring shelf is recognised as somebody's floor rather than faced over.
+  for (const b of v.benches) revetCut(s, v, b.x, b.z, b.hw, b.hd, b.y);
+  for (const b of v.buildings) revetCut(s, v, b.x, b.z, b.hw + 2, b.hd + 2, b.y);
+
   if (v.water.fountain) buildFountain(s, v.water.x, v.water.z, v.water.y);
   else buildWell(s, v.water.x, v.water.z, v.water.y);
 
@@ -994,6 +1365,11 @@ function buildVillage(chunk: Chunk, v: Village, seed: number): void {
     const nx = b.facing === 2 ? -1 : b.facing === 3 ? 1 : 0;
     const nz = b.facing === 0 ? -1 : b.facing === 1 ? 1 : 0;
     path(s, v, v.x, v.z, b.x + nx * (b.hw + 4), b.z + nz * (b.hd + 4), 1);
+  }
+  // After the paths: the flight bridges the pad rim to the path that ends at
+  // its foot, so it has to be the thing that wins that ground.
+  for (const b of v.buildings) {
+    if (s.hitsRect(b.x, b.z, b.hw + 16, b.hd + 16)) doorSteps(s, v, b);
   }
 
   for (const p of v.plots) buildPlot(s, p, v.accent, seed);

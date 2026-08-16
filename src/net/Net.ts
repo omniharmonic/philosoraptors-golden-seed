@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { makeSigil, type Sigil } from '../systems/sigil';
 import { buildRaptor, type RaptorParts } from '../entities/Raptor';
 import type { DeclKind } from '../systems/declarations';
+import { seedFromLocation } from '../world/seed';
 import {
   resolveRelay,
   type ClientMsg,
@@ -213,10 +214,10 @@ export class Net {
       this.connected = true;
       this.events.onStatus?.('Connected to the flock.');
       // Carry our seed so an empty world adopts the landscape its creator chose.
-      const seedParam = new URLSearchParams(location.search).get('seed');
+      const hasSeed = new URLSearchParams(location.search).has('seed');
       this.send({
         t: 'hello', id: this.id, name: this.sigil.name, hue: this.sigil.hue,
-        ...(seedParam ? { seed: Number(seedParam) } : {}),
+        ...(hasSeed ? { seed: seedFromLocation() } : {}),
       });
     };
 

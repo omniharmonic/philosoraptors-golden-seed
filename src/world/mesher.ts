@@ -3,6 +3,7 @@ import { Chunk, CX, CY, CZ, idx } from './Chunk';
 import type { World } from './World';
 import { AIR, isCross, isLiquid, isOpaque, blockDef } from './blocks';
 import type { Atlas } from '../art/atlas';
+import { unlit } from '../art/unlit';
 import { FACE_BOTTOM, FACE_SIDE, FACE_TOP } from '../art/atlas';
 import { BLOCKLIGHT_TINT, SKYLIGHT_COLD, SKYLIGHT_WARM, mixRgb, type RGB } from '../art/palette';
 
@@ -57,7 +58,11 @@ const UV: [number, number][] = [
 /**
  * No `normal` array. The world draws with MeshBasicMaterial and fully baked
  * vertex-colour lighting, so normals are never read — they were 12 bytes per
- * vertex of dead weight across every chunk mesh in the world.
+ * vertex of dead weight across every chunk mesh in the world (~280MB of
+ * resident heap at full draw distance).
+ *
+ * Keeping them out requires the materials to be unlit() — see materials()
+ * below — otherwise WebGPU's node pipeline asks for the attribute anyway.
  */
 interface Buffers {
   pos: number[];

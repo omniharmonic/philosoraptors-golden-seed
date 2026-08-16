@@ -25,6 +25,7 @@ import { Net } from './net/Net';
 import { HUD } from './ui/HUD';
 import { Chat } from './ui/Chat';
 import { Title } from './ui/Title';
+import { seedFromLocation } from './world/seed';
 import { MiniMap } from './ui/MiniMap';
 import { RightPanel } from './ui/RightPanel';
 import { Menu, loadOptions, type GameOptions } from './ui/Menu';
@@ -42,19 +43,11 @@ import { SKY_COLD, SKY_WARM, FOG_COLD, FOG_WARM, hexToRgb, mixRgb, rgbToHex } fr
 // ---------------------------------------------------------------- boot
 
 /**
- * The world seed.
- *
- * Terrain is generated identically on every client from this number, which is
- * why the relay never sends any of it. `?seed=` lets a world be created with a
- * chosen landscape; the authority adopts whatever the first arrival brings and
- * tells later arrivals the real one.
+ * The world seed. Terrain is generated identically on every client from this,
+ * which is why the relay never sends any of it. `?seed=` accepts a word or a
+ * number; the authority adopts whatever the first arrival brings.
  */
-const DEFAULT_SEED = 20260816;
-const SEED = (() => {
-  const q = new URLSearchParams(location.search).get('seed');
-  const n = q ? Number(q) : NaN;
-  return Number.isFinite(n) && n > 0 ? n >>> 0 : DEFAULT_SEED;
-})();
+const SEED = seedFromLocation();
 const atlas = buildAtlas();
 
 /**
