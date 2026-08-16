@@ -357,7 +357,7 @@ export class Chat {
 
       const at = document.createElement('span');
       at.className = 'at';
-      at.textContent = clock(entry.t);
+      at.textContent = clock(entry.at);
       head.appendChild(at);
 
       const said = document.createElement('span');

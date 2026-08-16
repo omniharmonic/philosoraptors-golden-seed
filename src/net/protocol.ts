@@ -94,7 +94,8 @@ export interface WireChat {
   text: string;
   /** `say` = a player spoke. `omen`/`system` = the world spoke. */
   kind: 'say' | 'omen' | 'system';
-  t: number;
+  /** Timestamp. Named `at` because `t` is the wire envelope's message type. */
+  at: number;
 }
 
 // ------------------------------------------------------- client -> server
@@ -149,6 +150,37 @@ export type ServerMsg =
       authority: PlayerId | null };
 
 export const RELAY_PORT = 8787;
+
+/**
+ * Where to connect, in priority order:
+ *
+ *   ?relay=wss://...   an explicit relay, for testing or a private server
+ *   ?w=CODE            a hosted world at the edge, on the public relay
+ *   (served over http) the machine that served the page, on the LAN port
+ *
+ * The last case is what makes LAN play configuration-free: whoever opens the
+ * page finds the relay on the same host they loaded it from.
+ */
+export const EDGE_RELAY = 'https://philosoraptors.omniharmonic.workers.dev';
+
+export function resolveRelay(loc: Location = location): { url: string; code: string | null; hosted: boolean } {
+  const q = new URLSearchParams(loc.search);
+
+  const explicit = q.get('relay');
+  if (explicit) return { url: explicit, code: q.get('w'), hosted: false };
+
+  const code = q.get('w');
+  if (code) {
+    const base = (q.get('edge') || EDGE_RELAY).replace(/^http/, 'ws').replace(/\/$/, '');
+    return { url: `${base}/w/${encodeURIComponent(code.toUpperCase())}`, code: code.toUpperCase(), hosted: true };
+  }
+
+  const host = loc.hostname || 'localhost';
+  const scheme = loc.protocol === 'https:' ? 'wss' : 'ws';
+  return { url: `${scheme}://${host}:${RELAY_PORT}`, code: null, hosted: false };
+}
+
+/** Kept for callers that only want the LAN form. */
 export const relayUrl = (host = 'localhost') => `ws://${host}:${RELAY_PORT}`;
 
 /**

@@ -10,13 +10,17 @@
     "play": "node server/server.mjs & vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "edge:dev": "wrangler dev",
+    "edge:deploy": "wrangler deploy",
+    "pages:deploy": "npm run build && wrangler pages deploy dist --project-name philosoraptors"
   },
   "devDependencies": {
     "@types/three": "^0.171.0",
     "@types/ws": "^8.18.1",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "wrangler": "^4.123.0"
   },
   "dependencies": {
     "three": "^0.171.0",

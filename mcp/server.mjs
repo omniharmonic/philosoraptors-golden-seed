@@ -588,7 +588,7 @@ function handle(msg) {
     }
 
     case 'chat':
-      state.chat.push({ from: msg.from, text: msg.text, kind: msg.kind, t: msg.ts ?? nowMs() });
+      state.chat.push({ from: msg.from, text: msg.text, kind: msg.kind, at: msg.at ?? nowMs() });
       if (state.chat.length > 200) state.chat.shift();
       logEvent(`${msg.kind === 'say' ? 'CHAT' : 'OMEN'} ${msg.from}: ${msg.text}`);
       break;

@@ -3,7 +3,7 @@ import { makeSigil, type Sigil } from '../systems/sigil';
 import { buildRaptor, type RaptorParts } from '../entities/Raptor';
 import type { DeclKind } from '../systems/declarations';
 import {
-  relayUrl,
+  resolveRelay,
   type ClientMsg,
   type ServerMsg,
   type PlayerId,
@@ -108,7 +108,17 @@ const PLUMAGE_BAND = (coherence: number): number =>
   Math.round(Math.min(1, Math.max(0, coherence / 85)) * 4) / 4;
 
 const CHAT_KEEP = 200;
-const SEND_HZ = 12;
+/**
+ * Uplink rate.
+ *
+ * Lowered from 12Hz. Hosted worlds bill on INBOUND messages, so this number is
+ * the one that decides how many hours of free play a world gets — and at 8Hz
+ * with movement gating, a peer's motion is still smooth because the renderer
+ * interpolates between updates anyway.
+ */
+const SEND_HZ = 8;
+/** Below this, a player is standing still and needs no update at all. */
+const IDLE_EPSILON = 0.02;
 
 /** Dispose a peer model's GPU resources. Peers churn; leaks would accumulate. */
 function disposeModel(root: THREE.Object3D): void {
@@ -182,7 +192,7 @@ export class Net {
    * is the normal single-player case, not an error, and a console full of
    * WebSocket noise would train players to ignore the console.
    */
-  connect(url: string = relayUrl(location.hostname || 'localhost')): void {
+  connect(url: string = resolveRelay().url): void {
     if (this.ws) return;
     this.closing = false;
     let ws: WebSocket;
@@ -269,18 +279,8 @@ export class Net {
    */
   private handle(raw: unknown): void {
     if (typeof raw !== 'object' || raw === null) return;
-    const probe = raw as { t?: unknown; from?: unknown; text?: unknown; kind?: unknown };
-
-    if (typeof probe.t === 'number') {
-      if (typeof probe.from !== 'string' || typeof probe.text !== 'string') return;
-      const kind = probe.kind === 'omen' || probe.kind === 'system' ? probe.kind : 'say';
-      const entry: WireChat = { from: probe.from, text: probe.text, kind, t: probe.t };
-      this.chat.push(entry);
-      if (this.chat.length > CHAT_KEEP) this.chat.shift();
-      this.events.onChat?.(entry);
-      return;
-    }
-
+    // The chat-typed-as-a-timestamp workaround is gone: the authority now names
+    // the chat timestamp `at`, so `t` is always the message type.
     const m = raw as ServerMsg;
     switch (m.t) {
       case 'welcome': {
@@ -342,6 +342,14 @@ export class Net {
         const mo = this.molochs.find((x) => x.uid === m.uid);
         if (mo) { mo.bound = 1; mo.state = 'banish'; }
         this.events.onMolochBound?.(m.uid);
+        break;
+      }
+
+      case 'chat': {
+        const entry: WireChat = { from: m.from, text: m.text, kind: m.kind, at: m.at };
+        this.chat.push(entry);
+        if (this.chat.length > CHAT_KEEP) this.chat.shift();
+        this.events.onChat?.(entry);
         break;
       }
 
@@ -447,14 +455,36 @@ export class Net {
     if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(msg));
   }
 
+  private lastSent = { x: 0, y: 0, z: 0, yaw: 0, coherence: -1 };
+  private idleTicks = 0;
+
   /**
-   * Position/pose, throttled to ~12 Hz. Everything else on the wire is
-   * event-driven, so this is the only recurring cost of being online.
+   * Position/pose, throttled and gated on actually having moved.
+   *
+   * This is the only recurring message a client sends, so on a hosted world it
+   * is what determines the running cost. Standing still now costs nothing at
+   * all, and a keepalive goes out once a second so peers do not time out.
    */
   sendState(dt: number, x: number, y: number, z: number, yaw: number, coherence: number): void {
     this.sendTimer += dt;
     if (!this.connected || this.sendTimer < 1 / SEND_HZ) return;
     this.sendTimer = 0;
+
+    const l = this.lastSent;
+    const moved =
+      Math.abs(x - l.x) > IDLE_EPSILON ||
+      Math.abs(y - l.y) > IDLE_EPSILON ||
+      Math.abs(z - l.z) > IDLE_EPSILON ||
+      Math.abs(yaw - l.yaw) > 0.01 ||
+      Math.abs(coherence - l.coherence) > 0.5;
+
+    if (!moved) {
+      // A standing player still needs an occasional heartbeat, but at 1Hz
+      // rather than 8 — that is a 90% cut for anyone reading the chat.
+      if (++this.idleTicks < SEND_HZ) return;
+    }
+    this.idleTicks = 0;
+    this.lastSent = { x, y, z, yaw, coherence };
     this.send({ t: 'state', x, y, z, yaw, coherence });
   }
 

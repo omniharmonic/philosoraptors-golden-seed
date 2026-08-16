@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "philosoraptors",
+  "main": "edge/worker.js",
+  "compatibility_date": "2025-01-01",
+
+  // Durable Objects are available on the Workers FREE plan, but only with the
+  // SQLite storage backend — hence new_sqlite_classes below rather than
+  // new_classes. One object per world code.
+  "durable_objects": {
+    "bindings": [{ "name": "VALLEY", "class_name": "Valley" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Valley"] }
+  ],
+
+  "observability": { "enabled": true }
+}
