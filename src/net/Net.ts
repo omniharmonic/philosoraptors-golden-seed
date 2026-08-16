@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { makeSigil, type Sigil } from '../systems/sigil';
 import { buildRaptor, type RaptorParts } from '../entities/Raptor';
-import type { SpellKey } from '../systems/spells';
+import type { DeclKind } from '../systems/declarations';
 import {
   relayUrl,
   type ClientMsg,
@@ -14,7 +14,6 @@ import {
   type WireHyper,
   type WireMoloch,
   type WirePlayer,
-  type WireSeal,
 } from './protocol';
 
 /**
@@ -38,7 +37,7 @@ import {
  */
 export type {
   PlayerId, Uid, SeedPower,
-  WireChat, WireGoldenSeed, WireHyper, WireMoloch, WirePlayer, WireSeal,
+  WireChat, WireGoldenSeed, WireHyper, WireMoloch, WirePlayer,
 } from './protocol';
 
 /** The whole welcome payload, kept as one object because it is one snapshot. */
@@ -75,11 +74,6 @@ export interface NetEvents {
   onPeerState?(id: PlayerId, x: number, y: number, z: number, yaw: number, coherence: number): void;
   onChat?(msg: WireChat): void;
 
-  onSealOpen?(seal: WireSeal): void;
-  onSealMark?(uid: Uid, playerId: PlayerId, marks: PlayerId[]): void;
-  onSealFire?(uid: Uid, key: SpellKey, x: number, y: number, z: number, marks: PlayerId[]): void;
-  onSealLapse?(uid: Uid): void;
-
   onMolochSpawn?(moloch: WireMoloch): void;
   onMolochBound?(uid: Uid): void;
   /** Live tether readout while streams are on him. */
@@ -92,7 +86,8 @@ export interface NetEvents {
   onHyperOpen?(hyper: WireHyper): void;
   onHyperAlign?(uid: Uid, by: PlayerId, name: string,
                 invigoration: number, required: number, contributors: PlayerId[]): void;
-  onHyperReal?(uid: Uid, claim: string, contributors: PlayerId[]): void;
+  onHyperReal?(uid: Uid, kind: DeclKind, claim: string,
+               x: number, y: number, z: number, contributors: PlayerId[]): void;
   onHyperFade?(uid: Uid): void;
 
   onSeedClaimed?(uid: Uid, key: SeedPower, by: PlayerId, name: string, mine: boolean): void;
@@ -331,23 +326,9 @@ export class Net {
         break;
       }
 
-      case 'sealOpen':
-        this.events.onSealOpen?.(m.seal);
-        break;
 
-      case 'sealMark':
-        this.events.onSealMark?.(m.uid, m.playerId, m.marks);
-        break;
 
-      case 'sealFire':
-        this.pressure = m.molochPressure;
-        this.events.onSealFire?.(m.uid, m.key, m.x, m.y, m.z, m.marks);
-        this.events.onMoloch?.(m.molochPressure);
-        break;
 
-      case 'sealLapse':
-        this.events.onSealLapse?.(m.uid);
-        break;
 
       case 'molochSpawn': {
         const i = this.molochs.findIndex((x) => x.uid === m.moloch.uid);
@@ -406,7 +387,7 @@ export class Net {
 
       case 'hyperReal':
         this.hypers = this.hypers.filter((x) => x.uid !== m.uid);
-        this.events.onHyperReal?.(m.uid, m.claim, m.contributors);
+        this.events.onHyperReal?.(m.uid, m.kind, m.claim, m.x, m.y, m.z, m.contributors);
         break;
 
       case 'hyperFade':
@@ -482,17 +463,14 @@ export class Net {
     if (t) this.send({ t: 'chat', text: t.slice(0, 400) });
   }
 
-  openSeal(key: SpellKey, x: number, y: number, z: number, quorum: number, ttl: number): void {
-    this.send({ t: 'sealOpen', key, x, y, z, quorum, ttl });
-  }
 
-  markSeal(uid: Uid): void {
-    this.send({ t: 'sealMark', uid });
-  }
 
-  /** Declare a future that is not yet true. Requires the Seed of Naming. */
-  speakHyperstition(claim: string): void {
-    this.send({ t: 'hyperstition', claim: claim.slice(0, 160) });
+  /**
+   * Declare a future that is not yet true. The single commitment verb — it
+   * replaced the old open-seal / mark-seal pair entirely.
+   */
+  declare(kind: DeclKind, claim: string): void {
+    this.send({ t: 'hyperstition', kind, claim: claim.slice(0, 200) });
   }
 
   /** Act as if a declared future were already true. Once per raptor, per hyper. */

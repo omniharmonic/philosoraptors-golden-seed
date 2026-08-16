@@ -26,6 +26,8 @@ import {
   SNOW, SOIL_RAKED, SPRUCE_LEAVES, SPRUCE_LOG, STONE, WATER,
 } from './blocks';
 import { stampLandmarks } from './landmarks';
+import { stampVillages, villageAt } from './villages';
+import { stampMonoliths } from './monoliths';
 
 /** Boulder sits near 5,430 ft; this is our stand-in plains datum. */
 export const PLAINS_Y = 36;
@@ -341,6 +343,23 @@ export function generateChunk(chunk: Chunk, seed: number): void {
   chunk.rebuildHeightMap();
   placeTrees(chunk, seed);
   stampLandmarks(chunk, seed);
+  // Villages last of the built things: they clear their own footprint, so any
+  // tree or authored structure they overlap loses.
+  stampVillages(chunk, seed);
+  // Monoliths never land inside a village — they are supposed to be found in
+  // empty country, and one standing in someone's garden reads as a bug.
+  stampMonoliths(chunk, seed, (x, z) => {
+    const CELL = 12 * CX;
+    const cx = Math.floor(x / CELL);
+    const cz = Math.floor(z / CELL);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const v = villageAt(cx + dx, cz + dz, seed);
+        if (v && Math.hypot(v.x - x, v.z - z) < v.radius + 40) return true;
+      }
+    }
+    return false;
+  });
 }
 
 /** Ground cover: scrub oak, prairie flowers, amber seeds, talus. */

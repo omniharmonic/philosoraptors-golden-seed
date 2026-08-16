@@ -61,6 +61,8 @@ export class Coherence {
   private floatTimer = 0;
 
   gain(n: number, reason: string, log?: (s: string) => void): void {
+    // Doing good work clears a little of what you cannot see about yourself.
+    if (n > 0) this.blindSpot = Math.max(0, this.blindSpot - n * 0.004);
     // A large blind spot means you are misreading your own situation, so your
     // own actions return less than you think they do.
     const eff = n * (1 - this.blindSpot * 0.55);
@@ -75,8 +77,15 @@ export class Coherence {
     log?.(`-${n.toFixed(0)} coherence — ${reason}`);
   }
 
+  /**
+   * Capped well below 1. It only clears by being preened, so an uncapped drift
+   * meant a player exploring alone went progressively blind and earned less for
+   * everything they did — survival-game pressure arriving through a back door.
+   * It should nag, not punish.
+   */
+  static readonly BLIND_MAX = 0.5;
   addBlindSpot(n: number): void {
-    this.blindSpot = Math.max(0, Math.min(1, this.blindSpot + n));
+    this.blindSpot = Math.max(0, Math.min(Coherence.BLIND_MAX, this.blindSpot + n));
   }
 
   clearBlindSpot(): void {

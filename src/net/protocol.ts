@@ -13,7 +13,7 @@
  * pixels. That is also what keeps two browser clients from disagreeing.
  */
 
-import type { SpellKey } from '../systems/spells';
+import type { DeclKind } from '../systems/declarations';
 
 export type PlayerId = string;
 export type Uid = string;
@@ -31,17 +31,6 @@ export interface WirePlayer {
   seeds: SeedPower[];
   /** True for MCP/agent clients. */
   agent: boolean;
-}
-
-export interface WireSeal {
-  uid: Uid;
-  key: SpellKey;
-  x: number; y: number; z: number;
-  quorum: number;
-  remaining: number;
-  openerId: PlayerId;
-  /** Distinct identities that have marked this commitment. */
-  marks: PlayerId[];
 }
 
 export type MolochState = 'roam' | 'reap' | 'menace' | 'banish';
@@ -75,13 +64,15 @@ export interface WireMoloch {
  */
 export interface WireHyper {
   uid: Uid;
+  /** Which declaration this is; decides the effect when it becomes true. */
+  kind: DeclKind;
   x: number; y: number; z: number;
   /** The declared future. Free text, written by the author. */
   claim: string;
   invigoration: number;
   required: number;
   contributors: PlayerId[];
-  targetUid: Uid;
+  targetUid: Uid | null;
   authorId: PlayerId;
   remaining: number;
 }
@@ -113,9 +104,7 @@ export type ClientMsg =
       x?: number; y?: number; z?: number; coherence?: number }
   | { t: 'state'; x: number; y: number; z: number; yaw: number; coherence: number }
   | { t: 'chat'; text: string }
-  | { t: 'sealOpen'; key: SpellKey; x: number; y: number; z: number; quorum: number; ttl: number }
-  | { t: 'sealMark'; uid: Uid }
-  | { t: 'hyperstition'; claim: string }
+  | { t: 'hyperstition'; kind: DeclKind; claim: string }
   | { t: 'align'; uid: Uid;
       /** Council raptors aligning alongside you. */
       assist?: number }
@@ -132,18 +121,13 @@ export type ClientMsg =
 
 export type ServerMsg =
   | { t: 'welcome'; you: PlayerId; seed: number; molochPressure: number; authority: boolean;
-      seals: WireSeal[]; molochs: WireMoloch[]; hypers: WireHyper[];
+      molochs: WireMoloch[]; hypers: WireHyper[];
       goldenSeeds: WireGoldenSeed[]; seedPowers: { key: SeedPower; name: string; grants: string }[];
       edits: [string, number][]; chat: WireChat[]; peers: WirePlayer[] }
   | ({ t: 'join' } & WirePlayer)
   | { t: 'leave'; id: PlayerId }
   | { t: 'state'; id: PlayerId; x: number; y: number; z: number; yaw: number; coherence: number }
   | ({ t: 'chat' } & WireChat)
-  | { t: 'sealOpen'; seal: WireSeal }
-  | { t: 'sealMark'; uid: Uid; playerId: PlayerId; marks: PlayerId[] }
-  | { t: 'sealFire'; uid: Uid; key: SpellKey; x: number; y: number; z: number;
-      marks: PlayerId[]; molochPressure: number }
-  | { t: 'sealLapse'; uid: Uid }
   | { t: 'molochSpawn'; moloch: WireMoloch }
   | { t: 'molochBound'; uid: Uid }
   | { t: 'molochHeld'; uid: Uid; tether: number; held: number; beamers: string[];
@@ -153,7 +137,8 @@ export type ServerMsg =
   | { t: 'hyperOpen'; hyper: WireHyper }
   | { t: 'hyperAlign'; uid: Uid; by: PlayerId; name: string;
       invigoration: number; required: number; contributors: PlayerId[] }
-  | { t: 'hyperReal'; uid: Uid; claim: string; contributors: PlayerId[] }
+  | { t: 'hyperReal'; uid: Uid; kind: DeclKind; claim: string;
+      x: number; y: number; z: number; contributors: PlayerId[] }
   | { t: 'hyperFade'; uid: Uid }
   | { t: 'seedClaimed'; uid: Uid; key: SeedPower; by: PlayerId; name: string }
   | { t: 'block'; x: number; y: number; z: number; id: number }
@@ -179,6 +164,8 @@ export const RULES = {
     'Each raptor may align with a given Hyperobject exactly once. Signatures are not votes you can stack.',
   quorumIsTheGame:
     'Every meaningful act needs k distinct raptors. There is no solo path to the Golden Seed.',
+  declareThenAlign:
+    'There is one commitment verb. You DECLARE a future that is not true yet; others ALIGN with it; at quorum it becomes true and the world changes to match. Nothing you declare is real until other raptors act as if it were.',
   beamsHoldTheyDoNotHurt:
     'Your beam does not damage Moloch. It tethers him. One stream barely slows him; three at once hold him still long enough to be taken. Cross the streams.',
 } as const;

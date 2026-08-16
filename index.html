@@ -209,6 +209,13 @@
               font-size: 11px; color: var(--dim); }
 
       /* ---- vignette that tightens with the blind spot */
+      #resume { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%);
+                z-index: 40; padding: 12px 22px; border-radius: 10px;
+                background: var(--panel); border: 1px solid var(--ember);
+                color: var(--core); font-size: 13px; letter-spacing: .1em;
+                text-transform: uppercase; opacity: 0; pointer-events: none;
+                transition: opacity .25s ease; }
+      #resume.show { opacity: 1; }
       #vig { position: fixed; inset: 0; pointer-events: none; z-index: 9;
              box-shadow: inset 0 0 200px 40px rgba(6,10,20,0); transition: box-shadow .6s ease; }
     </style>
@@ -216,6 +223,7 @@
   <body>
     <div id="vig"></div>
     <div id="hud"></div>
+    <div id="resume">click to resume</div>
     <div id="gate">
       <div id="gateBox">
         <h1>The Golden Seed</h1>
@@ -261,11 +269,14 @@
             becomes real only if enough others behave as though it already is.
           </p>
           <div class="step"><b class="n">H</b><span>
-            <b>Speak it.</b> Press <code class="inline">H</code> while a Moloch is
-            within 120m. You need <b>25 coherence</b> (or the Seed of Naming).
-            Press <code class="inline">J</code> first to cycle which claim you
-            will make — or type <code class="inline">/declare your own words</code>
-            into chat for a claim of your own.
+            <b>Speak it.</b> Press <code class="inline">J</code> to cycle through
+            the declarations — <em>The Ground Returns</em>, <em>Preening</em>,
+            <em>The Weave That Catches</em>, up to <em>The Golden Seed</em> — then
+            <code class="inline">H</code> to speak the one you have selected. The
+            bar along the bottom shows them all and what each does. Some need
+            coherence; one is spoken at a Moloch. Type
+            <code class="inline">/declare your own words</code> in chat to word it
+            yourself.
           </span></div>
           <div class="step"><b class="n">Y</b><span>
             <b>Align with one.</b> A hyperobject appears in the sky above the
@@ -275,9 +286,14 @@
             hyperobject solidifies, and it binds the Moloch outright.
           </span></div>
           <p class="note">
-            So: <b>streams</b> hold one Moloch by brute co-presence.
-            <b>Hyperstition</b> takes longer to set up but needs no one to stand
-            in the same place at the same second — only to agree.
+            This is the <em>only</em> commitment mechanic in the game. Everything
+            that needs more than one raptor — healing a valley, bridging a gap,
+            binding a Moloch, planting the Golden Seed — is a declaration someone
+            speaks and others make true.
+            <br /><br />
+            So: <b>streams</b> hold one Moloch by brute co-presence, in the same
+            second. <b>Declarations</b> take longer to set up but need only
+            agreement.
           </p>
         </div>
 
@@ -297,15 +313,15 @@
             <div><b>Mouse L</b><span>use held tool</span></div>
             <div><b>Mouse R</b><span>place block</span></div>
             <div><b>V</b><span>call / dismiss flock</span></div>
-            <div><b>H</b><span>declare a hyperstition</span></div>
-            <div><b>J</b><span>cycle which claim</span></div>
-            <div><b>Y</b><span>align with a hyperobject</span></div>
-            <div><b>Z</b><span>cycle seal</span></div>
-            <div><b>C</b><span>open the selected seal</span></div>
-            <div><b>F</b><span>mark a nearby seal</span></div>
+            <div><b>J</b><span>cycle declaration</span></div>
+            <div><b>H</b><span>declare it</span></div>
+            <div><b>Y</b><span>align with nearest</span></div>
+            <div><b>F</b><span>align with a declaration</span></div>
             <div><b>G</b><span>roll belly-up</span></div>
             <div><b>Enter</b><span>chat</span></div>
-            <div><b>T</b><span>collapse chat</span></div>
+            <div><b>T</b><span>switch map / chat</span></div>
+            <div><b>N</b><span>minimise the panel</span></div>
+            <div><b>B</b><span>map zoom</span></div>
             <div><b>Shift</b><span>sprint</span></div>
             <div><b>Ctrl / C</b><span>crouch</span></div>
             <div><b>M</b><span>mute</span></div>

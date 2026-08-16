@@ -106,11 +106,26 @@ const molochWire = (m) => ({
 const TETHER_TO_HOLD = 3;
 /** Coherence at which a raptor may declare a future without the Seed of Naming. */
 const NAMING_COHERENCE = 25;
+
+/**
+ * Declarations — the single commitment mechanic, replacing seals.
+ * Mirrors src/systems/declarations.ts; the server is the authority on quorum.
+ */
+const DECLARATIONS = {
+  green:  { quorum: 2, min: 0,  ttl: 70,  radius: 12, needsMoloch: false },
+  preen:  { quorum: 2, min: 0,  ttl: 60,  radius: 8,  needsMoloch: false },
+  honest: { quorum: 2, min: 6,  ttl: 60,  radius: 14, needsMoloch: false },
+  catch:  { quorum: 3, min: 12, ttl: 80,  radius: 14, needsMoloch: false },
+  admit:  { quorum: 3, min: 10, ttl: 70,  radius: 12, needsMoloch: false },
+  bind:   { quorum: 3, min: 25, ttl: 150, radius: 24, needsMoloch: true },
+  door:   { quorum: 4, min: 40, ttl: 120, radius: 20, needsMoloch: false },
+  seed:   { quorum: 7, min: 55, ttl: 180, radius: 24, needsMoloch: false },
+};
 /** A beam intent older than this is treated as released. */
 const BEAM_TIMEOUT_MS = 700;
 
 const hyperWire = (h) => ({
-  uid: h.uid, x: h.x, y: h.y, z: h.z,
+  uid: h.uid, kind: h.kind, x: h.x, y: h.y, z: h.z,
   claim: h.claim, invigoration: h.invigoration, required: h.required,
   contributors: [...h.contributors], targetUid: h.targetUid,
   authorId: h.authorId, remaining: h.remaining,
@@ -299,8 +314,12 @@ function tickHypers(dt) {
         m.bound = 1;
         broadcast({ t: 'molochBound', uid: m.uid });
       }
-      pushChat('the web', `"${h.claim}" is now true. ${h.contributors.size} sigils made it so.`, 'omen');
-      broadcast({ t: 'hyperReal', uid, claim: h.claim, contributors: [...h.contributors] });
+      pushChat('the web', `"${h.claim}" is now true. ${h.contributors.size} of us made it so.`, 'omen');
+      broadcast({
+        t: 'hyperReal', uid, kind: h.kind, claim: h.claim,
+        x: h.x, y: h.y, z: h.z,
+        contributors: [...h.contributors],
+      });
       hypers.delete(uid);
       world.quorumActs++;
       world.molochPressure = Math.max(0, world.molochPressure - 0.12);
@@ -418,40 +437,58 @@ wss.on('connection', (ws) => {
       case 'hyperstition': {
         const p = players.get(id);
         if (!p) return;
-        // Coherence is an equal path in, matching the client. The Seed of
-        // Naming sits up to 1.7km away, so gating solely on it made this
-        // unreachable for anyone who had not flown across the map. The client
-        // was updated for this and the server was not, which meant the client
-        // said yes and the authority silently said no.
-        if (!p.seeds.has('naming') && (p.coherence ?? 0) < NAMING_COHERENCE) {
+        const kind = String(m.kind || 'green');
+        const def = DECLARATIONS[kind];
+        if (!def) { send(ws, { t: 'denied', why: `Unknown declaration "${kind}".` }); return; }
+
+        // Coherence is an equal path in alongside the Seed of Naming, which
+        // sits up to 1.7km away and needs flight to reach.
+        if (!p.seeds.has('naming') && (p.coherence ?? 0) < def.min) {
           send(ws, {
             t: 'denied',
-            why: `Speaking a Hyperstition needs ${NAMING_COHERENCE} coherence (you have ${Math.floor(p.coherence ?? 0)}), or the Seed of Naming.`,
+            why: `That declaration needs ${def.min} coherence (you have ${Math.floor(p.coherence ?? 0)}), or the Seed of Naming.`,
           });
           return;
         }
-        // Must be declared against a Moloch within reach.
-        let target = null; let bd = Infinity;
-        for (const [, mm] of molochs) {
-          const d = Math.hypot(mm.x - p.x, mm.z - p.z);
-          if (d < bd) { bd = d; target = mm; }
+
+        // Only some declarations are spoken AT something.
+        let target = null;
+        if (def.needsMoloch) {
+          let bd = Infinity;
+          for (const [, mm] of molochs) {
+            const d = Math.hypot(mm.x - p.x, mm.z - p.z);
+            if (d < bd) { bd = d; target = mm; }
+          }
+          if (!target || bd > 120) {
+            send(ws, { t: 'denied', why: 'That one is spoken at a Moloch, and none is within 120m.' });
+            return;
+          }
         }
-        if (!target || bd > 120) {
-          send(ws, { t: 'denied', why: 'No Moloch within 120m to declare against.' });
-          return;
-        }
+
         const uid = `h${nextUid++}`;
-        const required = Math.max(3, Math.min(9, 3 + Math.floor(target.gorge / 60)));
+        // A gorged Moloch takes more of us to unmake.
+        const required = def.needsMoloch && target
+          ? Math.max(def.quorum, Math.min(9, def.quorum + Math.floor(target.gorge / 60)))
+          : def.quorum;
         const h = {
-          uid, claim: String(m.claim ?? 'A more beautiful world our hearts know is possible').slice(0, 160),
-          x: Math.round(target.x), y: Math.round(target.y) + 22, z: Math.round(target.z),
-          invigoration: 0, required,
-          contributors: new Set(), authorId: id,
-          targetUid: target.uid, remaining: 150,
+          uid,
+          kind,
+          claim: String(m.claim ?? '').slice(0, 200),
+          x: Math.round(target ? target.x : p.x),
+          y: Math.round(target ? target.y + 22 : p.y + 14),
+          z: Math.round(target ? target.z : p.z),
+          invigoration: 0,
+          required,
+          contributors: new Set(),
+          authorId: id,
+          targetUid: target ? target.uid : null,
+          remaining: def.ttl,
         };
         hypers.set(uid, h);
         broadcast({ t: 'hyperOpen', hyper: hyperWire(h) });
-        pushChat(p.name, `${p.name} speaks a Hyperstition: "${h.claim}" — ${required} sigils must act as if it were already true.`, 'omen');
+        pushChat(p.name,
+          `${p.name} declares: "${h.claim}" — ${required} of us must act as if it were already true.`,
+          'omen');
         break;
       }
 

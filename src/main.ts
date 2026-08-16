@@ -16,18 +16,20 @@ import { Player, type InputState } from './player/Player';
 import { raycastVoxel } from './player/raycast';
 import { Coherence } from './systems/coherence';
 import { Moloch } from './systems/moloch';
-import { SealSystem, SPELLS, SPELL_ORDER, type Seal, type SpellKey } from './systems/spells';
+import {
+  DECLARATIONS, DECL_ORDER, canDeclare, declOf, refusal, type DeclKind,
+} from './systems/declarations';
 import { Chapters, CHAPTERS } from './systems/chapters';
 import { Flock } from './entities/Flock';
 import { Net } from './net/Net';
 import { HUD } from './ui/HUD';
 import { Chat } from './ui/Chat';
 import { setupGate } from './ui/gate';
+import { MiniMap } from './ui/MiniMap';
+import { RightPanel } from './ui/RightPanel';
 import { MolochManager } from './entities/MolochManager';
 import { HyperObject } from './entities/HyperObject';
-import {
-  HyperState, SUGGESTED_CLAIMS, canSpeak, canAlign, distanceOk, stillNeeded,
-} from './systems/hyperstition';
+import { HyperState, canAlign, distanceOk, stillNeeded } from './systems/hyperstition';
 import { Powers, nextSeedToHunt, describeAdvice } from './systems/goldenseeds';
 import { Spark } from './systems/spark';
 import { Motif } from './systems/motif';
@@ -141,18 +143,6 @@ scene.add(molochs.group);
 const seedField = new SeedField();
 scene.add(seedField.group);
 
-const seals = new SealSystem({
-  onOpen: (s) => {
-    hud.log(`Seal opened: ${SPELLS[s.key].name} — ${s.marks.size}/${s.quorum} sigils`);
-    addSealVisual(s);
-  },
-  onMark: (s, sig) => hud.log(`${sig.name} marked the ${SPELLS[s.key].name} (${s.marks.size}/${s.quorum})`),
-  onFire: (s, def) => fireSeal(s, def.key),
-  onLapse: (s) => {
-    hud.log(`The ${SPELLS[s.key].name} seal lapsed. Not enough sigils in time.`);
-    removeSealVisual(s.uid);
-  },
-});
 
 const chat = new Chat({
   bindKeys: false,
@@ -165,7 +155,7 @@ const chat = new Chat({
     // `/declare <claim>` speaks a Hyperstition instead of chatting. Declaring a
     // future is a speech act here, so it belongs in the same box as speech.
     const m = /^\/declare\s+(.+)$/i.exec(text.trim());
-    if (m) { speakHyperstition(m[1]); return; }
+    if (m) { net.declare(DECL_ORDER[declIndex], m[1]); return; }
     net.say(text);
   },
   onRequestPointerLock: () => {
@@ -173,6 +163,19 @@ const chat = new Chat({
   },
 });
 chat.mount();
+
+/**
+ * The bottom-right corner holds the map by default and the chat on a tab, with
+ * a chevron to collapse both. Previously chat owned the corner outright and the
+ * event feed could not be minimised.
+ */
+const minimap = new MiniMap(SEED);
+minimap.mount();
+const rightPanel = new RightPanel({
+  map: { root: minimap.element, onShow: () => minimap.show(), onHide: () => minimap.hide() },
+  chat: { root: chat.root },
+});
+rightPanel.showMap();
 
 const net = new Net({
   onStatus: (t) => hud.log(t),
@@ -188,23 +191,11 @@ const net = new Net({
       const [x, y, z] = k.split(',').map(Number);
       world.setBlock(x, y, z, id);
     }
-    for (const s of w.seals) adoptRemoteSeal(s);
   },
-  onChat: (msg) => { chat.push(msg); if (msg.kind === 'say') motif.chirp(); },
-  onSealOpen: (s) => adoptRemoteSeal(s),
-  onSealMark: (uid, pid) => {
-    const s = seals.seals.find((q) => q.uid === uid);
-    const peer = net.peers.get(pid);
-    if (s && peer) seals.mark(s, peer.sigil);
-  },
-  onSealFire: (uid, key, x, y, z) => {
-    const s = seals.seals.find((q) => q.uid === uid);
-    if (s) { s.fired = true; s.burst = 0.0001; removeSealVisual(uid); }
-    applyEffect(key, x, y, z);
-  },
-  onSealLapse: (uid) => {
-    const i = seals.seals.findIndex((q) => q.uid === uid);
-    if (i >= 0) { removeSealVisual(uid); seals.seals.splice(i, 1); }
+  onChat: (msg) => {
+    chat.push(msg);
+    if (msg.kind === 'say') motif.chirp();
+    rightPanel.markUnread();
   },
 
   onMolochSpawn: (m) => {
@@ -242,7 +233,14 @@ const net = new Net({
   onHyperOpen: (h) => hyperState.open(h),
   onHyperAlign: (uid, by, name, inv, req, contribs) =>
     hyperState.align(uid, by, name, inv, req, contribs),
-  onHyperReal: (uid, claim, contribs) => hyperState.real(uid, claim, contribs),
+  onHyperReal: (uid, kind, claim, x, y, z, contribs) => {
+    hyperState.real(uid, claim, contribs);
+    applyEffect(kind, x, y, z);
+    coherence.gain(declOf(kind).reward, `"${claim}" became true`, (t) => hud.log(t));
+    spark.refill();
+    motif.play('harmony');
+    if (chapters.onDeclarationReal(kind)) advanceChapter();
+  },
   onHyperFade: (uid) => hyperState.fade(uid),
 
   onSeedClaimed: (_uid, key, _by, name, mine) => {
@@ -331,90 +329,34 @@ const heldBlock = (): number | null => {
   return sl.kind === 'block' ? sl.id : null;
 };
 
-/** Which seal Z cycles through and C casts. */
-let spellIndex = 0;
-let claimIdx = 0;
+let declIndex = 0;
 /** Held mouse button / agent intent: the stream is on. */
 let beaming = false;
 let beamTarget: Uid | null = null;
 let beamAssist = 0;
+/**
+ * Sticky beam target.
+ *
+ * The tether is paid for by several raptors at once, so dropping it because the
+ * aim cone missed for a single frame is expensive and reads as the flock
+ * "flashing in and out". Once locked onto a Moloch we hold him for a moment
+ * even through brief misses, as long as the stream is still running.
+ */
+let beamLockUid: string | null = null;
+let beamLockT = 0;
+const BEAM_LOCK_HOLD = 0.7;
 let beamHint = '';
 
-// ---------------------------------------------------------------- seal visuals
-
-const sealVisuals = new Map<string, THREE.Group>();
-
-function addSealVisual(s: Seal): void {
-  const def = SPELLS[s.key];
-  const g = new THREE.Group();
-  g.position.set(s.x + 0.5, s.y + 0.6, s.z + 0.5);
-
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(def.radius * 0.34, 0.11, 8, 48),
-    new THREE.MeshBasicMaterial({ color: def.colour, transparent: true, opacity: 0.85 }),
-  );
-  ring.rotation.x = Math.PI / 2;
-  g.add(ring);
-
-  const pillar = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.16, 0.16, 7, 6, 1, true),
-    new THREE.MeshBasicMaterial({ color: def.colour, transparent: true, opacity: 0.35, side: THREE.DoubleSide }),
-  );
-  pillar.position.y = 3.5;
-  g.add(pillar);
-
-  const light = new THREE.PointLight(def.colour, 2.5, def.radius * 2.4, 1.5);
-  light.position.y = 1.4;
-  g.add(light);
-
-  g.userData.ring = ring;
-  g.userData.light = light;
-  scene.add(g);
-  sealVisuals.set(s.uid, g);
-}
-
-function removeSealVisual(uid: string): void {
-  const g = sealVisuals.get(uid);
-  if (!g) return;
-  g.traverse((o) => { const m = o as THREE.Mesh; if (m.geometry) m.geometry.dispose(); });
-  g.removeFromParent();
-  sealVisuals.delete(uid);
-}
-
-function adoptRemoteSeal(w: { uid: string; key: SpellKey; x: number; y: number; z: number;
-                             quorum: number; remaining: number; openerId: string; marks: string[] }): void {
-  if (seals.seals.some((s) => s.uid === w.uid)) return;
-  const marks = new Map<string, ReturnType<Net['sigilFor']>>();
-  for (const pid of w.marks) marks.set(pid, net.sigilFor(pid));
-  const seal: Seal = {
-    uid: w.uid, key: w.key, x: w.x, y: w.y, z: w.z,
-    marks, quorum: w.quorum, remaining: w.remaining,
-    fired: false, openerId: w.openerId, burst: 0,
-  };
-  seals.seals.push(seal);
-  addSealVisual(seal);
-}
 
 // ---------------------------------------------------------------- spell effects
 
-function fireSeal(s: Seal, key: SpellKey): void {
-  const def = SPELLS[key];
-  hud.log(`${def.name} fires — ${s.marks.size} sigils aligned.`);
-  hud.showBanner(def.name, `${s.marks.size} sigils`, def.lore, 4200);
-  motif.play('answer');
-  spark.refill();
-  coherence.gain(def.reward, `${def.name} completed`, (t) => hud.log(t));
-  moloch.onQuorum(s.marks.size);
-  applyEffect(key, s.x, s.y, s.z);
-  removeSealVisual(s.uid);
-  if (chapters.onSealFired(key)) advanceChapter();
-}
 
-function applyEffect(key: SpellKey, x: number, y: number, z: number): void {
-  const base = SPELLS[key].radius;
+/** What the world does when a declaration becomes true. */
+function applyEffect(kind: DeclKind, x: number, y: number, z: number): void {
+  const base = DECLARATIONS[kind].radius;
 
-  switch (key) {
-    case 'rootline': {
+  switch (kind) {
+    case 'green': {
       const R = Math.round(base * powers.rootRadiusScale());
       let healed = 0;
       const always = powers.has('root');
@@ -439,7 +381,7 @@ function applyEffect(key: SpellKey, x: number, y: number, z: number): void {
       break;
     }
 
-    case 'weave': {
+    case 'catch': {
       const R = Math.round(base * powers.weaveRadiusScale());
       let laid = 0;
       for (let dz = -R; dz <= R; dz++) {
@@ -478,7 +420,7 @@ function applyEffect(key: SpellKey, x: number, y: number, z: number): void {
       break;
     }
 
-    case 'tally': {
+    case 'honest': {
       chapters.onTally();
       let lies = 0;
       for (let dz = -base; dz <= base; dz++)
@@ -494,20 +436,13 @@ function applyEffect(key: SpellKey, x: number, y: number, z: number): void {
       break;
     }
 
-    case 'admission':
+    case 'admit':
       flock.bellyRing(player.pos, 16);
       coherence.addBlindSpot(-0.4);
       hud.log('The circle folds down together, bellies to the sky.');
       break;
 
-    case 'mirror':
-      if (world.getBlock(x, y, z) === AIR && isSolid(world.getBlock(x, y - 1, z))) {
-        world.setBlock(x, y, z, CAMPFIRE);
-      }
-      hud.log('Two breaths become one rhythm. The flame rises straight and calm.');
-      break;
-
-    case 'song': {
+    case 'door': {
       let opened = 0;
       for (let dz = -base; dz <= base; dz++)
         for (let dy = -2; dy <= 26; dy++)
@@ -522,6 +457,16 @@ function applyEffect(key: SpellKey, x: number, y: number, z: number): void {
       hud.showBanner('The Song Becomes a Door', 'five voices',
         'A river of stars flowing uphill through soft darkness.', 7000);
       hud.log(`The obelisk answers. ${opened} blocks of honest blackness became a way through.`);
+      break;
+    }
+
+    case 'bind': {
+      // The binding itself is the server's doing. Here it just leaves a mark:
+      // a fire where the flock stood when they made it true.
+      if (world.getBlock(x, y, z) === AIR && isSolid(world.getBlock(x, y - 1, z))) {
+        world.setBlock(x, y, z, CAMPFIRE);
+      }
+      hud.log('The claim lands on him. He was already unmade; the world simply caught up.');
       break;
     }
 
@@ -685,72 +630,44 @@ function isPlantable(x: number, y: number, z: number): boolean {
          b === GRASS_WARM || b === PRAIRIE_GRASS || b === ROOT_LINE;
 }
 
-function castSpell(key: SpellKey): void {
-  const x = Math.floor(player.pos.x);
-  const y = Math.floor(player.pos.y);
-  const z = Math.floor(player.pos.z);
-  // Seed of Weaving lowers the Weave's quorum by one.
-  const quorum = Math.max(1, SPELLS[key].quorum + (key === 'weave' ? powers.weaveQuorumDelta() : 0));
-  const res = seals.open(key, x, y, z, net.sigil, coherence.value);
-  if ('error' in res) { hud.log(res.error); return; }
-  res.quorum = quorum;
-  net.openSeal(key, x, y, z, quorum, SPELLS[key].ttl);
-  setTimeout(() => tryFlockVouch(res), 900);
-}
 
-function tryFlockVouch(seal: Seal): void {
-  if (seal.fired) return;
-  const here = new THREE.Vector3(seal.x, seal.y, seal.z);
-  for (const r of flock.near(here, 16)) {
-    if (seal.marks.size >= seal.quorum) break;
-    if (!r.willVouch(coherence.value, r.pos.distanceTo(here))) continue;
-    if (seals.mark(seal, r.sigil)) coherence.gain(1, `${r.sigil.name} vouched`);
-  }
-  if (!seal.fired && seal.marks.size < seal.quorum) {
-    const short = seal.quorum - seal.marks.size;
-    hud.log(`${short} more sigil${short > 1 ? 's' : ''} needed. Find more of the flock, or raise their trust.`);
-  }
-}
 
-function markNearest(): void {
-  const near = seals.openSealsNear(player.pos.x, player.pos.y, player.pos.z, 16);
-  if (!near.length) { hud.log('No open seal within reach.'); return; }
-  const s = near[0];
-  if (seals.mark(s, net.sigil)) {
-    net.markSeal(s.uid);
-    coherence.vouches++;
-    coherence.gain(2, 'you vouched for a commitment');
-  } else {
-    hud.log('You have already marked that seal. A signature is not a vote you can stack.');
-    tryFlockVouch(s);
-  }
-}
-
-/** Coherence at which you may declare a future without the Seed of Naming. */
-const NAMING_COHERENCE = 25;
-
-function speakHyperstition(claim: string): void {
-  // The Seed of Naming sits up to 1.7km away and needs flight to reach, which
-  // needs coherence, which needed a quorum — a closed loop that made this key
-  // do nothing for a new player. Earned coherence is now an equal path in.
-  if (!canSpeak(powers.list()) && coherence.value < NAMING_COHERENCE) {
+/**
+ * Declare a future that is not true yet.
+ *
+ * This is now the ONLY commitment verb. Seals used to be a parallel system with
+ * the same shape (open one, others mark it, it fires at quorum) occupying eight
+ * number keys; they are gone, and everything they did is a declaration kind.
+ */
+function declareNow(): void {
+  const d = declOf(DECL_ORDER[declIndex]);
+  if (!canDeclare(d, coherence.value, powers.list())) {
     const advice = nextSeedToHunt(powers);
-    hud.showBanner(
-      'Not yet',
-      `needs ${NAMING_COHERENCE} coherence`,
-      `To declare a future you need ${NAMING_COHERENCE} coherence (you have ${Math.floor(coherence.value)}), or the Seed of Naming. Green some dead ground with your stream, or take a Moloch with the flock.${advice ? ' ' + describeAdvice(advice) : ''}`,
-      6500,
-    );
+    hud.showBanner('Not yet', `needs ${d.minCoherence} coherence`,
+      refusal(d, coherence.value) + (advice ? ' ' + describeAdvice(advice) : ''), 6500);
     return;
   }
-  const m = molochs.nearest(player.pos);
-  if (!m || m.dist > 120) {
-    hud.showBanner('Nothing to declare against', 'no Moloch within 120m',
-      'A Hyperstition is spoken AT something. Find a Moloch first — the objective line will point you at one.', 5000);
-    return;
+  if (d.needsMoloch) {
+    const m = molochs.nearest(player.pos);
+    if (!m || m.dist > 120) {
+      hud.showBanner('Nothing to declare it at', 'no Moloch within 120m',
+        `"${d.name}" is spoken at a Moloch. The line at the top of the screen will point you at one.`, 5000);
+      return;
+    }
   }
-  net.speakHyperstition(claim);
-  hud.log(`You speak it: "${claim}"`);
+  net.declare(d.kind, d.claim);
+  hud.log(`You declare it: "${d.claim}"`);
+}
+
+/** Cycle which declaration H will speak. */
+function cycleDeclaration(dir = 1): void {
+  declIndex = (declIndex + dir + DECL_ORDER.length) % DECL_ORDER.length;
+  const d = declOf(DECL_ORDER[declIndex]);
+  const ok = canDeclare(d, coherence.value, powers.list());
+  hud.log(
+    `${d.name} — ${d.plain} · ${d.quorum} must align` +
+    (ok ? ' · press H' : ` · needs ${d.minCoherence} coherence`),
+  );
 }
 
 function alignNearest(): void {
@@ -811,6 +728,8 @@ function updateBeam(dt: number): void {
   if (!beaming || slot().kind !== 'stream' || !spark.available) {
     if (beam.active) { beam.stop(); motif.beamOff(); }
     flock.assistAt(null, coherence.value);
+    beamLockUid = null;
+    beamLockT = 0;
     if (beaming && !spark.available) beamHint = 'Spark spent — it refills in a moment.';
     if (net.connected) net.beam(dt, null, false);
     beamTarget = null;
@@ -824,17 +743,49 @@ function updateBeam(dt: number): void {
   const REACH = 42;
 
   // 1. A Moloch takes priority: he is the thing you most want to point at.
-  let hitMoloch: { uid: string; point: THREE.Vector3; dist: number } | null = null;
-  for (const e of molochs.list()) {
-    const to = new THREE.Vector3(e.pos.x, e.pos.y + 2.2, e.pos.z).sub(eye);
-    const along = to.dot(dir);
-    if (along < 0 || along > REACH) continue;
-    const perp = to.clone().addScaledVector(dir, -along).length();
-    // Generous cone — this is an arcade beam, not a sniper rifle.
-    if (perp > 3.4 + e.gorge * 0.006) continue;
-    if (!hitMoloch || along < hitMoloch.dist) {
-      hitMoloch = { uid: e.id, point: new THREE.Vector3(e.pos.x, e.pos.y + 2.2, e.pos.z), dist: along };
+  //
+  // The cone is ANGULAR, not a fixed radius. A fixed 3.4-block perpendicular
+  // tolerance is ~5 degrees at 40m, which is a sniper shot; this stays a
+  // constant, forgiving angle at every range, plus his actual body width.
+  const CONE = 0.20;                    // tan of the half-angle, ~11 degrees
+  const pickMoloch = (slack: number) => {
+    let best: { uid: string; point: THREE.Vector3; dist: number } | null = null;
+    for (const e of molochs.list()) {
+      const point = new THREE.Vector3(e.pos.x, e.pos.y + 2.2, e.pos.z);
+      const to = point.clone().sub(eye);
+      const along = to.dot(dir);
+      if (along < 0 || along > REACH) continue;
+      const perp = to.addScaledVector(dir, -along).length();
+      const body = 1.6 + e.gorge * 0.02;
+      if (perp > body + along * CONE * slack) continue;
+      if (!best || along < best.dist) best = { uid: e.id, point, dist: along };
     }
+    return best;
+  };
+
+  let hitMoloch = pickMoloch(1);
+
+  // Stickiness: if we lost the aim but were on him a moment ago, stay on him.
+  if (hitMoloch) {
+    beamLockUid = hitMoloch.uid;
+    beamLockT = BEAM_LOCK_HOLD;
+  } else if (beamLockUid && beamLockT > 0) {
+    beamLockT -= dt;
+    // A wider recapture cone while the lock is warm, so small drift is free.
+    const relaxed = pickMoloch(2.2);
+    const held = molochs.get(beamLockUid);
+    if (relaxed && relaxed.uid === beamLockUid) hitMoloch = relaxed;
+    else if (held && held.pos.distanceTo(eye) < REACH) {
+      hitMoloch = {
+        uid: beamLockUid,
+        point: new THREE.Vector3(held.pos.x, held.pos.y + 2.2, held.pos.z),
+        dist: held.pos.distanceTo(eye),
+      };
+    } else {
+      beamLockUid = null;
+    }
+  } else {
+    beamLockUid = null;
   }
 
   // 2. Otherwise a flock raptor, to preen them.
@@ -940,6 +891,7 @@ function greenAt(x: number, y: number, z: number, dt: number): void {
 setupGate();
 
 const gate = document.getElementById('gate')!;
+const resumeHint = document.getElementById('resume')!;
 const playBtn = document.getElementById('play')!;
 let started = false;
 
@@ -956,11 +908,59 @@ playBtn.addEventListener('click', () => {
   }
 });
 
+/**
+ * "Pointer lock lost" is NOT the same event as "player paused", and treating
+ * them as one is what made chat unusable: opening the composer releases the
+ * lock, the re-lock afterwards is refused by the browser's cooldown, and the
+ * pause gate slammed over the composer.
+ *
+ * So the gate only appears when the player is actually idle — lock lost, not
+ * composing, and still gone after a grace period long enough for a legitimate
+ * release-and-retake.
+ */
+let unlockGrace = 0;
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement === renderer.domElement) { gate.classList.add('hidden'); return; }
-  // Losing the pointer to open the chat composer is not a pause — without this
-  // the full-screen gate lands on top of the composer and chat is unusable.
-  if (started && !chat.isComposing) gate.classList.remove('hidden');
+  if (document.pointerLockElement === renderer.domElement) {
+    gate.classList.add('hidden');
+    resumeHint.classList.remove('show');
+    return;
+  }
+  if (!started) return;
+  unlockGrace = performance.now();
+  setTimeout(() => {
+    if (document.pointerLockElement === renderer.domElement) return;
+    if (chat.isComposing) return;
+    // Still unlocked and not typing: offer a click-to-resume rather than the
+    // full gate, which is heavy and hides the world.
+    resumeHint.classList.add('show');
+  }, 700);
+});
+
+/**
+ * Clicking the WORLD retakes the pointer once the browser will allow it.
+ *
+ * Capture phase, so it must exclude the HUD itself: a capture listener on
+ * window runs before the event reaches a button, so stopPropagation() on a tab
+ * strip cannot defeat it, and clicking MAP/CHAT would silently grab pointer
+ * lock and hide the cursor.
+ */
+addEventListener('mousedown', (e) => {
+  if (!started || chat.isComposing) return;
+  const t = e.target as HTMLElement | null;
+  if (t && t.closest('#rightPanel, #chat, #minimap, #hud, #gate')) return;
+  if (document.pointerLockElement !== renderer.domElement &&
+      performance.now() - unlockGrace > 300) {
+    renderer.domElement.requestPointerLock();
+    resumeHint.classList.remove('show');
+  }
+}, true);
+
+addEventListener('keydown', (e) => {
+  // Escape is the only thing that actually pauses.
+  if (e.code === 'Escape' && started && !chat.isComposing) {
+    gate.classList.remove('hidden');
+    resumeHint.classList.remove('show');
+  }
 });
 
 addEventListener('mousemove', (e) => {
@@ -1021,24 +1021,19 @@ addEventListener('keydown', (e) => {
     case 'ControlLeft': case 'KeyC': input.crouch = true; break;
     case 'KeyQ': selectSlot(hotbarIndex - 1); break;
     case 'KeyE': selectSlot(hotbarIndex + 1); break;
-    case 'KeyZ':
-      spellIndex = (spellIndex + 1) % SPELL_ORDER.length;
-      hud.log(`Seal ready: ${SPELLS[SPELL_ORDER[spellIndex]].name} — press C to open it.`);
-      break;
-    case 'KeyF': markNearest(); break;
+    case 'KeyF': alignNearest(); break;
     case 'KeyG':
       player.rollBellyUp();
       flock.bellyRing(player.pos, 12);
       coherence.gain(2, 'you showed the soft belly');
       break;
-    case 'KeyH': speakHyperstition(SUGGESTED_CLAIMS[claimIdx].text); break;
-    case 'KeyJ':
-      claimIdx = (claimIdx + 1) % SUGGESTED_CLAIMS.length;
-      hud.log(`Claim ready: "${SUGGESTED_CLAIMS[claimIdx].text}" — press H to declare it.`);
-      break;
+    case 'KeyH': declareNow(); break;
+    case 'KeyJ': cycleDeclaration(1); break;
     case 'KeyY': alignNearest(); break;
-    case 'KeyT': chat.toggle(); break;
-    case 'Enter': chat.openComposer(); break;
+    case 'KeyT': rightPanel.toggle(); break;
+    case 'KeyN': rightPanel.minimise(); break;
+    case 'KeyB': minimap.cycleZoom(); break;
+    case 'Enter': rightPanel.focusChat(); chat.openComposer(); break;
     case 'KeyV': {
       if (flock.followers.length) {
         const n = flock.dismiss();
@@ -1058,7 +1053,6 @@ addEventListener('keydown', (e) => {
       }
       break;
     }
-    case 'KeyC': castSpell(SPELL_ORDER[spellIndex]); break;
     case 'KeyM': hud.log(motif.toggleMute() ? 'Sound off.' : 'Sound on.'); break;
     case 'KeyR': player.settle(world); break;
     default: {
@@ -1114,7 +1108,7 @@ function frame(now: number): void {
 // screenshots. Vite strips this branch from the production bundle.
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__philo = {
-    world, player, coherence, spark, powers, molochs, hyperState, seals, net, motif, flock, SEED,
+    world, player, coherence, spark, powers, molochs, hyperState, net, motif, flock, SEED,
     // Drive the stream without pointer lock, so it can be exercised headlessly.
     setBeaming: (on: boolean) => { beaming = on; },
     get beaming() { return beaming; },
@@ -1133,7 +1127,6 @@ requestAnimationFrame(frame);
 
   coherence.update(dt, moloch.pressure);
   moloch.update(dt, world, player.pos.x, player.pos.z);
-  seals.update(dt);
   flock.update(dt, world, player.pos);
   molochs.update(dt, world, player.pos);
   hyperState.update(dt);
@@ -1193,19 +1186,6 @@ requestAnimationFrame(frame);
 
   sun.intensity = 0.35 + dayN * 1.1;
 
-  // --- seal visuals
-  for (const s of seals.seals) {
-    const g = sealVisuals.get(s.uid);
-    if (!g) continue;
-    const ring = g.userData.ring as THREE.Mesh;
-    const light = g.userData.light as THREE.PointLight;
-    const fill = s.marks.size / s.quorum;
-    ring.rotation.z += dt * (0.4 + fill * 1.8);
-    ring.scale.setScalar(0.6 + fill * 0.5 + (s.fired ? s.burst * 4 : 0));
-    (ring.material as THREE.MeshBasicMaterial).opacity =
-      s.fired ? Math.max(0, 1 - s.burst) : 0.5 + fill * 0.5;
-    light.intensity = (1.5 + fill * 4) * (s.fired ? Math.max(0, 1 - s.burst) * 6 : 1);
-  }
 
   // --- HUD at 12 Hz
   hudTimer += dt;
@@ -1216,6 +1196,19 @@ requestAnimationFrame(frame);
     const threat = near && near.dist < 60
       ? ` · MOLOCH ${Math.round(near.dist)}m`
       : '';
+    // The map samples pure terrain functions, so it draws country that is not
+    // resident — which is the point, since the world is kilometres across.
+    minimap.update({
+      x: player.pos.x, y: player.pos.y, z: player.pos.z, yaw: player.yaw,
+      molochs: molochs.list().map((m) => ({ x: m.pos.x, z: m.pos.z, label: 'Moloch' })),
+      peers: [...net.peers.values()].map((p) => ({ x: p.pos.x, z: p.pos.z, label: p.sigil.name })),
+      declarations: hyperState.active.map((h) => ({
+        x: h.x, z: h.z, label: DECLARATIONS[h.kind].name,
+        progress: h.invigoration / Math.max(1, h.required),
+      })),
+      seeds: net.goldenSeeds.filter((g) => !g.claimedBy).map((g) => ({ x: g.x, z: g.z, label: g.name })),
+    });
+
     const obj = currentObjective();
     hud.update({
       sigil: net.sigil,
@@ -1224,6 +1217,14 @@ requestAnimationFrame(frame);
       objective: obj.main,
       objectiveSub: obj.sub,
       followers: flock.followers.length,
+      declIndex,
+      hypers: hyperState.active.map((h) => ({
+        kind: h.kind,
+        claim: h.claim,
+        invigoration: h.invigoration,
+        required: h.required,
+        mine: h.contributors.includes(net.id),
+      })),
       backend,
       fps,
       coherence: coherence.value,
@@ -1238,7 +1239,6 @@ requestAnimationFrame(frame);
       chapterStatus: chapters.status(),
       chapterIndex: chapters.current,
       chapterTotal: CHAPTERS.length,
-      seals: seals.seals.filter((s) => !s.fired),
       hotbar: HOTBAR,
       hotbarIndex,
       counts,

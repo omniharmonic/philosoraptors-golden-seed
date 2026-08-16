@@ -1,5 +1,5 @@
 import { drawSigil, sigilCanvas, type Sigil } from '../systems/sigil';
-import { SPELLS, SPELL_ORDER, type Seal, type SpellKey } from '../systems/spells';
+import { DECLARATIONS, DECL_ORDER, type DeclKind } from '../systems/declarations';
 import { blockName, blockDef, BLOCKS } from '../world/blocks';
 import { TILE, buildAtlas, FACE_SIDE } from '../art/atlas';
 import type { Chapter } from '../systems/chapters';
@@ -15,16 +15,7 @@ export type HotSlotView =
  * are evocative but opaque — "Mirror Fire" tells you nothing about what will
  * happen when you press 1.
  */
-const PLAIN: Record<SpellKey, string> = {
-  mirror: 'light a fire',
-  rootline: 'green the ground',
-  preen: 'clear blind spot',
-  tally: 'expose false checks',
-  admission: 'admit a mistake',
-  weave: 'bridge a gap',
-  song: 'open the door',
-  seed: 'win the game',
-};
+
 
 export interface HudState {
   sigil: Sigil;
@@ -38,6 +29,10 @@ export interface HudState {
   objectiveSub: string;
   /** Raptors currently following you. */
   followers: number;
+  /** Which declaration H will speak. */
+  declIndex: number;
+  /** Live declarations awaiting alignment. */
+  hypers: { kind: DeclKind; claim: string; invigoration: number; required: number; mine: boolean }[];
   /** 'WebGPU' or 'WebGL2'. */
   backend: string;
   fps: number;
@@ -53,7 +48,6 @@ export interface HudState {
   chapterStatus: string;
   chapterIndex: number;
   chapterTotal: number;
-  seals: Seal[];
   hotbar: HotSlotView[];
   hotbarIndex: number;
   counts: Record<number, number>;
@@ -193,11 +187,16 @@ export class HUD {
     this.buildSpellbook();
   }
 
+  /**
+   * The declaration selector. One row, one highlighted entry — J cycles it and
+   * H speaks it. This replaced an eight-tile spellbook that most players never
+   * pressed because the number keys it claimed were needed for the hotbar.
+   */
   private buildSpellbook(): void {
-    this.spellBox.innerHTML = SPELL_ORDER.map((k, i) => {
-      const s = SPELLS[k];
-      return `<div class="spell" data-k="${k}" title="${s.lore}\n\n${s.hint}">
-        <b>${i + 1}</b>${s.name}<u>${PLAIN[k]}</u><i>${s.quorum} sigils</i>
+    this.spellBox.innerHTML = DECL_ORDER.map((k) => {
+      const d = DECLARATIONS[k];
+      return `<div class="spell" data-k="${k}" title="${d.lore}\n\n${d.claim}">
+        ${d.name}<u>${d.plain}</u><i>${d.quorum} align</i>
       </div>`;
     }).join('');
   }
@@ -252,7 +251,9 @@ export class HUD {
     this.el.perf.textContent = `${s.backend} · ${Math.round(s.fps)} fps`;
 
     // The thing you cannot see about yourself closes in at the edges.
-    this.vig.style.boxShadow = `inset 0 0 ${140 + s.blindSpot * 220}px ${20 + s.blindSpot * 90}px rgba(8,12,24,${s.blindSpot * 0.8})`;
+    // Softer curve: the vignette should read as a nagging edge, not as fog.
+    this.vig.style.boxShadow =
+      `inset 0 0 ${120 + s.blindSpot * 150}px ${14 + s.blindSpot * 46}px rgba(8,12,24,${s.blindSpot * 0.55})`;
 
     // --- chapter
     this.el.chN.textContent = `Chapter ${s.chapterIndex + 1} / ${s.chapterTotal}`;
@@ -261,51 +262,40 @@ export class HUD {
     this.el.chObj.textContent = s.chapterStatus;
     this.el.chEpi.textContent = s.chapter.epigraph;
 
-    // --- spellbook availability
-    for (const node of Array.from(this.spellBox.children) as HTMLElement[]) {
-      const key = node.dataset.k as SpellKey;
-      const def = SPELLS[key];
+    // --- declaration selector
+    const nodes = Array.from(this.spellBox.children) as HTMLElement[];
+    nodes.forEach((node, i) => {
+      const def = DECLARATIONS[node.dataset.k as DeclKind];
       const locked = s.coherence < def.minCoherence;
-      node.classList.toggle('locked', locked);
-      node.classList.toggle('on', !locked);
-      const need = node.querySelector('i')!;
-      need.textContent = locked ? `needs ${def.minCoherence}` : `${def.quorum} sigils`;
-    }
+      const selected = i === s.declIndex;
+      node.classList.toggle('locked', locked && !selected);
+      node.classList.toggle('on', selected);
+      node.querySelector('i')!.textContent =
+        locked ? `needs ${def.minCoherence}` : `${def.quorum} align`;
+    });
 
-    this.renderSeals(s.seals, s.sigil);
+    this.renderHypers(s.hypers);
     this.renderHotbar(s);
     this.renderPeers(s);
   }
 
-  private renderSeals(seals: Seal[], me: Sigil): void {
-    if (seals.length === 0) { this.sealBox.innerHTML = ''; return; }
+  /** Live declarations and how far from true they are. */
+  private renderHypers(hypers: HudState['hypers']): void {
+    if (!hypers.length) { this.sealBox.innerHTML = ''; return; }
     this.sealBox.innerHTML = '';
-    for (const seal of seals.slice(0, 3)) {
-      const def = SPELLS[seal.key];
+    for (const h of hypers.slice(0, 3)) {
+      const d = DECLARATIONS[h.kind];
       const box = document.createElement('div');
       box.className = 'panel seal';
-      const mine = seal.marks.has(me.id);
+      const pct = Math.round((h.invigoration / Math.max(1, h.required)) * 100);
       box.innerHTML = `
         <div class="sealHead">
-          <span>${def.name}</span>
-          <span class="ttl">${seal.marks.size}/${seal.quorum} · ${Math.ceil(seal.remaining)}s</span>
+          <span>${d.name}</span>
+          <span class="ttl">${h.invigoration}/${h.required}</span>
         </div>
-        <div class="marks"></div>
-        <div class="sub">${mine ? 'You have marked this.' : 'Press F to add your sigil.'}</div>
+        <div class="bar" style="margin-top:6px"><i style="width:${pct}%;background:linear-gradient(90deg,#4da6ff,var(--core))"></i></div>
+        <div class="sub">${h.mine ? 'You have aligned with this.' : 'Press F to align.'}</div>
       `;
-      const marks = box.querySelector('.marks')!;
-      for (const sig of seal.marks.values()) {
-        const c = sigilCanvas(sig, 40);
-        c.className = 'mark';
-        c.style.width = '20px';
-        c.style.height = '20px';
-        marks.appendChild(c);
-      }
-      for (let i = seal.marks.size; i < seal.quorum; i++) {
-        const d = document.createElement('div');
-        d.className = 'slot';
-        marks.appendChild(d);
-      }
       this.sealBox.appendChild(box);
     }
   }

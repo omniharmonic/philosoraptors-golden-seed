@@ -13,7 +13,7 @@
  * more sigils a commitment needs, and which legal moves exist right now.
  *
  * The design invariant that shapes every tool below: NOTHING HERE LETS ONE
- * AGENT WIN ALONE. `attack` exists only so that it can refuse. `open_seal`
+ * AGENT WIN ALONE. `attack` exists only so that it can refuse. `declare`
  * creates an obligation, not an effect. `align` is capped at one per raptor.
  * An agent that wants progress has to talk to somebody.
  *
@@ -34,6 +34,49 @@ import WebSocket from 'ws';
 // Mirrored by hand from the TypeScript sources because this file is plain ESM
 // and cannot import them. If either side changes, both must change.
 
+/** Relay to join. Set PHILO_RELAY to reach a game on another machine. */
+const RELAY_URL = process.env.PHILO_RELAY || 'ws://localhost:8787';
+/** How close you must be to declare something at a Moloch. */
+const HYPERSTITION_RANGE = 120;
+/** How close you must be to align with a declaration. */
+const ALIGN_RANGE = 60;
+/** Metres per second on foot. */
+const WALK_SPEED = 5;
+/** How close you must walk to claim a Golden Seed. */
+const SEED_PICKUP_RANGE = 6;
+/** How close you must be to hold a stream on a Moloch. */
+const BEAM_RANGE = 44;
+/** Simultaneous streams that pin a Moloch. */
+const TETHER_TO_HOLD = 3;
+
+/**
+ * src/systems/sigil.ts — name derivation only, mirrored by hand.
+ * The agent never draws a glyph; it only needs the stable name other players
+ * will see in chat and on the roster.
+ */
+const SIGIL_ONSET = ['ka', 've', 'thu', 'sil', 'mor', 'ael', 'rhe', 'tan', 'oru', 'lys', 'bre', 'nim'];
+const SIGIL_CODA = ['dris', 'val', 'thas', 'wen', 'rok', 'lith', 'mar', 'sunn', 'ver', 'eth', 'orn', 'ka'];
+
+function strHash(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+
+function makeSigil(id) {
+  const h = strHash(id);
+  const a = SIGIL_ONSET[h % SIGIL_ONSET.length];
+  const b = SIGIL_CODA[(h >>> 8) % SIGIL_CODA.length];
+  return {
+    id,
+    name: a.charAt(0).toUpperCase() + a.slice(1) + b,
+    hue: Math.floor((h % 3600) / 10),
+  };
+}
+
 /** src/net/protocol.ts — RULES (verbatim). */
 const RULES = {
   molochImmuneToForce:
@@ -48,85 +91,27 @@ const RULES = {
     'Your beam does not damage Moloch. It TETHERS him. One stream barely slows him; three raptors beaming the SAME Moloch AT THE SAME MOMENT hold him still long enough to take him. Agree a uid and a moment in chat first, then all call beam() together.',
 };
 
-/** src/systems/spells.ts — SPELLS, reduced to the fields an agent can act on. */
-const SPELLS = {
-  mirror: {
-    key: 'mirror', name: 'Mirror Fire', quorum: 2, radius: 8, ttl: 45,
-    minCoherence: 0, reward: 8,
-    hint: 'Two raptors, facing. The smallest possible act of alignment.',
-  },
-  rootline: {
-    key: 'rootline', name: 'Root-line', quorum: 2, radius: 10, ttl: 60,
-    minCoherence: 12, reward: 10,
-    hint: 'Greens dead ground. Needs two, because one raptor replanting a valley is just gardening.',
-  },
-  preen: {
-    key: 'preen', name: 'Preening', quorum: 2, radius: 6, ttl: 40,
-    minCoherence: 8, reward: 12,
-    hint: 'Clears a blind spot you cannot clear yourself. Someone else has to see it.',
-  },
-  tally: {
-    key: 'tally', name: 'Honest Tally', quorum: 1, radius: 12, ttl: 30,
-    minCoherence: 6, reward: 4,
-    hint: 'Reveals what a green lantern is actually approving. Checks can lie.',
-  },
-  admission: {
-    key: 'admission', name: 'Belly-up', quorum: 3, radius: 10, ttl: 50,
-    minCoherence: 15, reward: 18,
-    hint: 'Roll over and show the soft belly. Costs nothing but pride; pays the most.',
-  },
-  weave: {
-    key: 'weave', name: 'The Weave That Catches', quorum: 3, radius: 14, ttl: 60,
-    minCoherence: 22, reward: 16,
-    hint: 'Spans a gap with walkable light. Also catches anyone who falls near it.',
-  },
-  song: {
-    key: 'song', name: 'Song of Rings', quorum: 5, radius: 20, ttl: 90,
-    minCoherence: 40, reward: 25,
-    hint: 'Sung in overlapping rounds at the obelisk. Five voices turn a wall into a door.',
-  },
-  seed: {
-    key: 'seed', name: 'The Golden Seed', quorum: 7, radius: 24, ttl: 120,
-    minCoherence: 60, reward: 40,
-    hint: 'Seven sigils. There is no version of this you can do alone. That is the point.',
-  },
+/** src/systems/declarations.ts, reduced to what an agent can act on. */
+const DECLARATIONS = {
+  green:  { name: 'The Ground Returns', quorum: 2, min: 0,  plain: 'dead soil comes back to life',
+            claim: 'This ground grows food again, and our grandchildren will not know it was ever bare.' },
+  preen:  { name: 'Preening', quorum: 2, min: 0, plain: 'clears a blind spot',
+            claim: 'I cannot see my own back. Will you preen me?' },
+  honest: { name: 'The Honest Tally', quorum: 2, min: 6, plain: 'exposes checks that lie',
+            claim: 'Our measures will tell the truth even when the truth is unflattering.' },
+  catch:  { name: 'The Weave That Catches', quorum: 3, min: 12, plain: 'a bridge of light over a gap',
+            claim: 'Nobody falls here. If one of us slips, the rest are already holding.' },
+  admit:  { name: 'Belly-up', quorum: 3, min: 10, plain: 'admit a mistake together',
+            claim: 'We were wrong, and we would rather say so than be right alone.' },
+  bind:   { name: 'The Horned One Is Unmade', quorum: 3, min: 25, needsMoloch: true,
+            plain: 'binds a Moloch outright',
+            claim: 'The horned one is already unmade. We simply have not caught up to it yet.' },
+  door:   { name: 'The Song Becomes a Door', quorum: 4, min: 40, plain: 'opens the obelisk',
+            claim: 'There is a way through, and it opens to a song rather than a key.' },
+  seed:   { name: 'The Golden Seed', quorum: 7, min: 55, plain: 'plants the third attractor — wins the game',
+            claim: 'A regenerative civilisation, with aligned incentives and interbeing at the core.' },
 };
-
-const SPELL_ORDER = ['mirror', 'rootline', 'preen', 'tally', 'admission', 'weave', 'song', 'seed'];
-
-/** src/player/Player.ts — WALK. The agent gets the walking body, never sprint or flight. */
-const WALK_SPEED = 5.0;
-/** server/server.mjs — the two ranges the relay actually enforces. */
-const HYPERSTITION_RANGE = 120;
-const ALIGN_RANGE = 60;
-/** server/server.mjs — golden seeds are claimed by walking within this of them. */
-const SEED_PICKUP_RANGE = 6;
-
-const RELAY_URL = process.env.PHILO_RELAY || 'ws://localhost:8787';
-
-// ------------------------------------------------------------------ sigil
-// src/systems/sigil.ts + src/world/noise.ts, ported verbatim so the name the
-// agent reports for itself is the same glyph-name a human sees over its head.
-
-function strHash(s) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h >>> 0;
-}
-
-const ONSET = ['ka', 've', 'thu', 'sil', 'mor', 'ael', 'rhe', 'tan', 'oru', 'lys', 'bre', 'nim'];
-const CODA = ['dris', 'val', 'thas', 'wen', 'rok', 'lith', 'mar', 'sunn', 'ver', 'eth', 'orn', 'ka'];
-
-function makeSigil(id) {
-  const h = strHash(id);
-  const hue = Math.floor((h % 3600) / 10);
-  const a = ONSET[h % ONSET.length];
-  const b = CODA[(h >>> 8) % CODA.length];
-  return { id, name: a.charAt(0).toUpperCase() + a.slice(1) + b, hue };
-}
+const DECL_ORDER = ['green', 'preen', 'honest', 'catch', 'admit', 'bind', 'door', 'seed'];
 
 // ------------------------------------------------------------------ state
 
@@ -320,22 +305,22 @@ function lookHypers() {
     .sort((a, b) => a.distance - b.distance);
 }
 
-function lookSeals() {
-  return [...state.seals.values()]
-    .map((s) => {
-      const def = SPELLS[s.key] || { name: s.key, hint: '' };
+/** Declarations awaiting alignment. */
+function lookDeclarations() {
+  return [...state.hypers.values()]
+    .map((h) => {
+      const def = DECLARATIONS[h.kind] || { name: h.kind, plain: '' };
       return {
-        uid: s.uid,
-        spell: s.key,
+        uid: h.uid,
+        kind: h.kind,
         name: def.name,
-        marks: s.marks.length,
-        quorum: s.quorum,
-        stillNeeds: Math.max(0, s.quorum - s.marks.length),
-        youMarked: s.marks.includes(state.me.id),
-        openedBy: s.openerId === state.me.id ? 'you' : (state.peers.get(s.openerId)?.name ?? s.openerId),
-        secondsLeft: sealSecondsLeft(s),
-        hint: def.hint,
-        ...where(s.x, s.z),
+        does: def.plain,
+        claim: h.claim,
+        aligned: h.invigoration,
+        required: h.required,
+        stillNeeds: Math.max(0, h.required - h.invigoration),
+        youAligned: (h.contributors || []).includes(state.me.id),
+        distance: r1(distTo(h.x, h.z)),
       };
     })
     .sort((a, b) => a.distance - b.distance);
@@ -367,7 +352,7 @@ function suggestions(view) {
 
   const sealToMark = view.seals.find((s) => !s.youMarked);
   if (sealToMark) {
-    out.push(`mark_seal("${sealToMark.uid}") — ${sealToMark.name} needs ${sealToMark.stillNeeds} more sigil(s), lapses in ${sealToMark.secondsLeft}s.`);
+    out.push(`align("${sealToMark.uid}") — ${sealToMark.name} needs ${sealToMark.stillNeeds} more to align.`);
   }
 
   const near = view.molochs[0];
@@ -375,7 +360,7 @@ function suggestions(view) {
     if (state.me.seeds.has('naming')) {
       const declared = view.hyperobjects.some((h) => h.targetMoloch === near.uid);
       if (!declared && near.distance <= HYPERSTITION_RANGE) {
-        out.push(`speak_hyperstition("<a future that is not yet true>") — Moloch ${near.uid} is ${near.distance}m away, inside the ${HYPERSTITION_RANGE}m declaration range.`);
+        out.push(`declare("bind") — Moloch ${near.uid} is ${near.distance}m away, inside the ${HYPERSTITION_RANGE}m declaration range.`);
       } else if (!declared) {
         out.push(`move(${near.x}, ${near.z}) — get within ${HYPERSTITION_RANGE}m of Moloch ${near.uid} to speak a Hyperstition against him.`);
       }
@@ -392,12 +377,12 @@ function suggestions(view) {
     }
   }
 
-  const affordable = [...SPELL_ORDER]
+  const affordable = [...DECL_ORDER]
     .reverse()
-    .find((k) => state.me.coherence >= SPELLS[k].minCoherence);
+    .find((k) => state.me.coherence >= DECLARATIONS[k].min);
   if (affordable) {
-    const d = SPELLS[affordable];
-    out.push(`open_seal("${affordable}") — ${d.name}, needs ${d.quorum} distinct sigils within ${d.ttl}s. Opening it does nothing on its own; it is a request for company.`);
+    const d = DECLARATIONS[affordable];
+    out.push(`declare("${affordable}") — ${d.name} (${d.plain}), needs ${d.quorum} to align. Declaring does nothing on its own; it is a request for company.`);
   }
 
   if (view.goldenSeeds.length && !view.hyperobjects.length) {
@@ -435,7 +420,7 @@ function lookView() {
     players: lookPlayers(),
     molochs: lookMolochs(),
     hyperobjects: lookHypers(),
-    seals: lookSeals(),
+    declarations: lookDeclarations(),
     goldenSeeds: lookSeeds(),
     chat: state.chat.slice(-12).map((c) => `${c.kind === 'say' ? '' : '* '}${c.from}: ${c.text}`),
   };
@@ -498,7 +483,7 @@ HOW TO PLAY, AS AN AGENT
   3. move(x, z) to close distance; wait(seconds) to let the world tick and read
      the deltas; say(text) to coordinate — this is the highest-value tool you
      have, because every other tool depends on somebody else acting.
-  4. open_seal / mark_seal / speak_hyperstition / align to commit.
+  4. declare(kind) to speak a future, align(uid) to make someone else's true.
 
 WHAT TO DO WHEN YOU ARE ALONE
   Not "grind". There is nothing to grind. Claim a Golden Seed, keep pressure in
@@ -509,8 +494,8 @@ WHAT TO DO WHEN YOU ARE ALONE
   ${RULES.alignOncePerRaptor}`;
 
 function spellTable() {
-  return SPELL_ORDER.map((k) => {
-    const s = SPELLS[k];
+  return DECL_ORDER.map((k) => {
+    const s = DECLARATIONS[k];
     return {
       key: k, name: s.name, quorum: s.quorum, ttl: s.ttl,
       minCoherence: s.minCoherence, reward: s.reward, radius: s.radius, hint: s.hint,
@@ -573,8 +558,6 @@ function handle(msg) {
       state.chat = msg.chat || [];
       state.peers.clear();
       for (const p of msg.peers || []) state.peers.set(p.id, p);
-      state.seals.clear();
-      for (const s of msg.seals || []) state.seals.set(s.uid, { ...s, _at: nowMs() });
       state.molochs.clear();
       for (const m of msg.molochs || []) state.molochs.set(m.uid, m);
       state.hypers.clear();
@@ -610,37 +593,9 @@ function handle(msg) {
       logEvent(`${msg.kind === 'say' ? 'CHAT' : 'OMEN'} ${msg.from}: ${msg.text}`);
       break;
 
-    case 'sealOpen':
-      state.seals.set(msg.seal.uid, { ...msg.seal, _at: nowMs() });
-      logEvent(`Seal ${msg.seal.uid} opened by ${peerName(msg.seal.openerId)}: ${SPELLS[msg.seal.key]?.name ?? msg.seal.key} — ${msg.seal.marks.length}/${msg.seal.quorum} sigils, ${Math.round(msg.seal.remaining)}s.`);
-      break;
 
-    case 'sealMark': {
-      const s = state.seals.get(msg.uid);
-      if (s) s.marks = msg.marks;
-      logEvent(`${peerName(msg.playerId)} marked seal ${msg.uid} (${msg.marks.length}/${s?.quorum ?? '?'}).`);
-      break;
-    }
 
-    case 'sealFire': {
-      const def = SPELLS[msg.key];
-      state.seals.delete(msg.uid);
-      state.lastSealFire = { uid: msg.uid, key: msg.key, marks: msg.marks, t: nowMs() };
-      state.pressure = msg.molochPressure;
-      // Every signatory is paid, which is exactly how the browser scores it.
-      if (msg.marks.includes(state.me.id) && def) {
-        state.me.coherence = clamp(state.me.coherence + def.reward, 0, 100);
-        logEvent(`Seal ${msg.uid} FIRED: ${def.name} with ${msg.marks.length} sigils. +${def.reward} coherence (you are now ${Math.round(state.me.coherence)}). Pressure ${r1(msg.molochPressure)}.`);
-      } else {
-        logEvent(`Seal ${msg.uid} FIRED: ${def?.name ?? msg.key} with ${msg.marks.length} sigils. You were not on it. Pressure ${r1(msg.molochPressure)}.`);
-      }
-      break;
-    }
 
-    case 'sealLapse':
-      state.seals.delete(msg.uid);
-      logEvent(`Seal ${msg.uid} lapsed — not enough distinct sigils in time.`);
-      break;
 
     case 'molochSpawn':
       state.molochs.set(msg.moloch.uid, msg.moloch);
@@ -896,41 +851,24 @@ const TOOLS = [
     },
   },
   {
-    name: 'open_seal',
+    name: 'declare',
     description:
-      'Open a commitment at your position. It has NO effect until the required number of distinct sigils mark it before it lapses. Returns the seal uid to broadcast to others.',
+      'Declare a future that is not true yet. THE single commitment verb — it replaced the old seal system. Declaring does NOTHING on its own; it is a request for company. Others (and NPC flock following them) must align() with it, and only at quorum does it become true and change the world. Call list_declarations() to see the kinds.',
     inputSchema: {
       type: 'object',
       properties: {
-        spell: { type: 'string', enum: SPELL_ORDER, description: 'Which commitment to open.' },
+        kind: { type: 'string', enum: DECL_ORDER, description: 'Which declaration to speak.' },
+        claim: { type: 'string', description: 'Optional: your own wording. Defaults to the canonical claim for that kind.' },
       },
-      required: ['spell'],
+      required: ['kind'],
       additionalProperties: false,
     },
   },
   {
-    name: 'mark_seal',
+    name: 'list_declarations',
     description:
-      "Add your sigil to an open seal. Idempotent per identity: you cannot fill a quorum by marking twice. Fires the seal if your mark completes the quorum, paying every signatory.",
-    inputSchema: {
-      type: 'object',
-      properties: { uid: { type: 'string', description: 'Seal uid from look().' } },
-      required: ['uid'],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'speak_hyperstition',
-    description:
-      `Declare a future that is not yet true, against the nearest Moloch within ${HYPERSTITION_RANGE}m. Requires the Seed of Naming. The resulting Hyperobject is inert and does nothing until enough OTHER raptors align with it.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        claim: { type: 'string', description: 'The declared future, in your own words. Max 160 chars.' },
-      },
-      required: ['claim'],
-      additionalProperties: false,
-    },
+      'Every declaration kind: what it does, how many raptors must align, and the coherence it needs. Call this before declare().',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'align',
@@ -1108,180 +1046,59 @@ async function callTool(name, args) {
       });
     }
 
-    // ------------------------------------------------------------- open_seal
-    case 'open_seal': {
+    // --------------------------------------------------------------- declare
+    case 'declare': {
       requireJoined();
-      const key = String(args.spell ?? '');
-      const def = SPELLS[key];
+      const kind = String(args.kind ?? '');
+      const def = DECLARATIONS[kind];
       if (!def) {
-        return fail({
-          error: `"${key}" is not a spell.`,
-          validSpells: spellTable(),
-        });
+        return fail(`Unknown declaration "${kind}". Call list_declarations() — valid kinds are ${DECL_ORDER.join(', ')}.`);
       }
-      if (state.me.coherence < def.minCoherence) {
-        return fail({
-          error: `${def.name} needs ${def.minCoherence} coherence — you have ${Math.floor(state.me.coherence)}.`,
-          howToEarnCoherence: 'Mark someone else\'s open seal, or open one others can mark. Every signatory of a fired seal is paid; solo effort pays nothing.',
-          affordableNow: SPELL_ORDER.filter((k) => state.me.coherence >= SPELLS[k].minCoherence),
-        });
+      if (state.me.coherence < def.min && !(state.me.seeds || []).includes('naming')) {
+        return fail(`"${def.name}" needs ${def.min} coherence; you have ${Math.floor(state.me.coherence)}. Earn it by helping others' declarations become true, or hold a stream on a Moloch alongside other raptors.`);
       }
-      // The browser's SealSystem merges a re-open into a nearby seal of the
-      // same key rather than fragmenting quorum across two. Do the same, or an
-      // agent standing next to a half-signed seal would split the vote.
-      const nearSame = [...state.seals.values()].find(
-        (s) => s.key === key && distTo(s.x, s.z) < def.radius,
-      );
-      // Already yours: opening a second one here would split the very quorum
-      // this branch exists to protect. Say so instead of fragmenting it.
-      if (nearSame && nearSame.marks.includes(state.me.id)) {
-        return ok({
-          alreadyOpen: nearSame.uid,
-          note: `You already have a ${def.name} seal open ${r1(distTo(nearSame.x, nearSame.z))}m away. Opening another would split the quorum, so nothing was sent.`,
-          marks: nearSame.marks.length,
-          quorum: def.quorum,
-          stillNeeds: Math.max(0, def.quorum - nearSame.marks.length),
-          secondsLeft: sealSecondsLeft(nearSame),
-          next: `Recruit others: say('${def.name} open at ${Math.round(nearSame.x)},${Math.round(nearSame.z)} — uid ${nearSame.uid}, needs ${Math.max(0, def.quorum - nearSame.marks.length)} more'), then wait().`,
-        });
+      if (def.needsMoloch) {
+        const near = nearestMoloch();
+        if (!near || near.distance > HYPERSTITION_RANGE) {
+          return fail(`"${def.name}" is spoken AT a Moloch and none is within ${HYPERSTITION_RANGE}m. move() to one first — look() gives you bearings.`);
+        }
       }
-      if (nearSame) {
-        send({ t: 'sealMark', uid: nearSame.uid });
-        await sleep(400);
-        const s = state.seals.get(nearSame.uid);
-        return ok({
-          markedExisting: nearSame.uid,
-          note: `A ${def.name} seal was already open ${r1(distTo(nearSame.x, nearSame.z))}m away, so your sigil went there instead of splitting the quorum.`,
-          marks: s ? s.marks.length : def.quorum,
-          quorum: def.quorum,
-          fired: !s,
-        });
-      }
-
-      const before = new Set(state.seals.keys());
-      send({
-        t: 'sealOpen',
-        key,
-        x: Math.round(state.me.x), y: Math.round(state.me.y), z: Math.round(state.me.z),
-        quorum: def.quorum, ttl: def.ttl,
-      });
-      const opened = await waitFor(
-        () => [...state.seals.values()].find((s) => !before.has(s.uid) && s.openerId === state.me.id && s.key === key),
-        2000,
-      );
-      if (!opened) {
-        return fail(`The relay did not confirm the ${def.name} seal. It may have closed the connection — call look().`);
-      }
-      const stillNeeds = Math.max(0, def.quorum - opened.marks.length);
-      return ok({
-        uid: opened.uid,
-        spell: key,
-        name: def.name,
-        position: { x: opened.x, y: opened.y, z: opened.z },
-        marks: opened.marks.length,
-        quorum: def.quorum,
-        stillNeeds,
-        secondsLeft: sealSecondsLeft(opened),
-        effectSoFar: 'None. A seal is a commitment, not a cast.',
-        next: stillNeeds > 0
-          ? `say('${def.name} is open at ${Math.round(opened.x)},${Math.round(opened.z)} — uid ${opened.uid}, needs ${stillNeeds} more sigil(s) in ${def.ttl}s'), then wait(${Math.min(30, def.ttl)}). Other raptors complete it with mark_seal on uid ${opened.uid}.`
-          : `Quorum is already met on paper, but the relay only evaluates quorum when a sigil is ADDED, never on open. Call mark_seal('${opened.uid}') — or have anyone else do so — to actually fire it.`,
-        hint: def.hint,
-      });
-    }
-
-    // ------------------------------------------------------------- mark_seal
-    case 'mark_seal': {
-      requireJoined();
-      const uid = String(args.uid ?? '');
-      const seal = state.seals.get(uid);
-      if (!seal) {
-        return fail({
-          error: `No open seal "${uid}". It may have fired or lapsed.`,
-          openSeals: lookSeals(),
-        });
-      }
-      if (seal.marks.includes(state.me.id)) {
-        return fail({
-          error: 'Your sigil is already on that seal.',
-          rule: RULES.quorumIsTheGame,
-          detail: `It has ${seal.marks.length}/${seal.quorum}. The missing ${Math.max(0, seal.quorum - seal.marks.length)} must be other raptors — say() and ask.`,
-        });
-      }
-      const since = nowMs();
-      send({ t: 'sealMark', uid });
-      await sleep(500);
-      const after = state.seals.get(uid);
-      const fired = !after;
-      const fire = fired && state.lastSealFire?.uid === uid ? state.lastSealFire : null;
-      return ok({
-        uid,
-        spell: seal.key,
-        name: SPELLS[seal.key]?.name ?? seal.key,
-        fired,
-        marks: fired ? (fire?.marks.length ?? seal.quorum) : after.marks.length,
-        quorum: seal.quorum,
-        stillNeeds: fired ? 0 : Math.max(0, after.quorum - after.marks.length),
-        coherence: Math.round(state.me.coherence),
-        events: eventsSince(since),
-        note: fired
-          ? 'Your sigil completed the quorum. Every signatory was paid and Moloch pressure fell.'
-          : 'Signed. It does nothing yet — that is the design. Ask the remaining raptors in chat.',
-      });
-    }
-
-    // ------------------------------------------------------- speak_hyperstition
-    case 'speak_hyperstition': {
-      requireJoined();
-      const claim = String(args.claim ?? '').trim().slice(0, 160);
-      if (!claim) return fail('speak_hyperstition(claim) needs a claim — a future that is not yet true, in your own words.');
-
-      if (!state.me.seeds.has('naming')) {
-        const seed = state.goldenSeeds.find((g) => g.key === 'naming');
-        return fail({
-          error: RULES.hyperstitionRequiresNaming,
-          youHold: [...state.me.seeds],
-          seedOfNaming: seed && !seed.claimedBy
-            ? { status: 'unclaimed', ...where(seed.x, seed.z), next: `move(${seed.x}, ${seed.z}) and walk within ${SEED_PICKUP_RANGE}m of it.` }
-            : { status: 'held by another raptor', by: seed ? peerName(seed.claimedBy) : 'unknown', next: 'Ask them in chat to speak the Hyperstition, and offer to align with it.' },
-        });
-      }
-      const near = nearestMoloch();
-      if (!near || near.distance > HYPERSTITION_RANGE) {
-        return fail({
-          error: near
-            ? `Nearest Moloch is ${Math.round(near.distance)}m away; a Hyperstition must be declared against one within ${HYPERSTITION_RANGE}m.`
-            : 'There is no Moloch in the world to declare against. A Hyperstition needs something to be against.',
-          nearestMoloch: near ? { uid: near.moloch.uid, ...where(near.moloch.x, near.moloch.z) } : null,
-        });
-      }
-
-      const before = new Set(state.hypers.keys());
       state.lastDenied = null;
-      send({ t: 'hyperstition', claim });
-      const opened = await waitFor(
-        () => [...state.hypers.values()].find((h) => !before.has(h.uid) && h.authorId === state.me.id),
-        2500,
-      );
-      if (!opened) {
-        return fail(state.lastDenied?.why ?? 'The relay did not open a Hyperobject. Call look() and check the Moloch is still within range.');
-      }
+      const before = new Set(state.hypers.keys());
+      send({ t: 'hyperstition', kind, claim: String(args.claim ?? def.claim).slice(0, 200) });
+      await sleep(900);
+      if (state.lastDenied) return fail(state.lastDenied);
+      const opened = [...state.hypers.values()].find((h) => !before.has(h.uid));
+      if (!opened) return fail('The relay did not confirm the declaration. Call look().');
       return ok({
-        uid: opened.uid,
+        declared: opened.uid,
+        kind,
+        name: def.name,
         claim: opened.claim,
-        targetMoloch: opened.targetUid,
-        invigoration: opened.invigoration,
+        aligned: opened.invigoration,
         required: opened.required,
-        stillNeeds: opened.required - opened.invigoration,
-        secondsLeft: Math.round(opened.remaining),
-        position: { x: opened.x, y: opened.y, z: opened.z },
-        effectSoFar: 'None. It is inert and barely visible. Words are not yet true.',
-        next: `Your own align("${opened.uid}") counts once, so at minimum ${opened.required - 1} OTHER raptors must align within ${ALIGN_RANGE}m of it before the timer runs out. say() the uid and the claim now.`,
-        rule: RULES.alignOncePerRaptor,
+        effect: def.plain,
+        note: 'Nothing has happened yet. A declaration is a request for company.',
+        next: `say('I declared ${def.name} at ${Math.round(opened.x)},${Math.round(opened.z)} — uid ${opened.uid}, needs ${opened.required - opened.invigoration} more to align'), then wait(). Others call align('${opened.uid}').`,
       });
     }
 
-    // ------------------------------------------------------------- align
+    case 'list_declarations': {
+      return ok({
+        howItWorks: RULES.declareThenAlign,
+        kinds: DECL_ORDER.map((k) => ({
+          kind: k,
+          name: DECLARATIONS[k].name,
+          does: DECLARATIONS[k].plain,
+          mustAlign: DECLARATIONS[k].quorum,
+          needsCoherence: DECLARATIONS[k].min,
+          spokenAtAMoloch: !!DECLARATIONS[k].needsMoloch,
+          claim: DECLARATIONS[k].claim,
+        })),
+        yourCoherence: Math.floor(state.me.coherence),
+      });
+    }
+
     case 'align': {
       requireJoined();
       const uid = String(args.uid ?? '');
@@ -1402,10 +1219,10 @@ async function callTool(name, args) {
         relayRefusal: state.lastDenied?.why ?? 'Moloch does not answer to force.',
         whyThisToolExists: 'You would have tried it. Now it is explicit: there is no combat system, no hit points, and no amount of coherence, blocks or tools that changes this.',
         whatWorksInstead: [
-          `A raptor with the Seed of Naming speaks a Hyperstition against him: speak_hyperstition(claim), within ${HYPERSTITION_RANGE}m.`,
+          `One raptor declares it unmade: declare("bind"), within ${HYPERSTITION_RANGE}m — needs 25 coherence or the Seed of Naming.`,
           `Distinct raptors align with it: align(uid), within ${ALIGN_RANGE}m, once each.`,
           'When invigoration reaches the requirement the claim becomes true and binds him.',
-          'Meanwhile, fired seals cut Moloch pressure — the field that spawns him in the first place.',
+          'Or: several raptors hold streams on him AT THE SAME MOMENT — beam(uid). Three at once takes him.',
         ],
         events: eventsSince(since),
       });

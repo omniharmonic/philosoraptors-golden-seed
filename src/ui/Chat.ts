@@ -271,7 +271,10 @@ export class Chat {
     this.input.value = '';
     this.input.blur();
     if (send && text) this.onSend?.(text);
-    this.onRequestPointerLock?.();
+    // Chrome refuses a pointer-lock request made immediately after an exit, so
+    // asking right now reliably fails and the caller sees "lock lost" a second
+    // time. Give the browser a beat before asking for it back.
+    setTimeout(() => this.onRequestPointerLock?.(), 250);
   }
 
   /**
