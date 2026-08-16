@@ -372,35 +372,37 @@
             <div id="lobbyList" style="margin-top:10px"></div>
           </div>
           <p class="note">
-            Hosting puts a world on Cloudflare's edge, near you, and gives you a
-            link. Anyone who opens it is in your world — no install, no account,
-            no port forwarding. It runs on the free tier; see
-            <code class="inline">DEPLOY.md</code> for the two-minute setup and
-            what it costs (about nothing).
+            Nothing to set up. Click <b>host a world</b> and you get a link —
+            anyone who opens it is standing in your valley. No install, no
+            account, no downloads, nothing running on your computer. The world
+            lives on Cloudflare's network near you and keeps running whether or
+            not you stay.
           </p>
         </div>
 
-        <div class="sect">
-          <h3>Or play with people on your network</h3>
+        <div class="sect devOnly">
+          <h3>Running your own copy? <span style="color:var(--dim);text-transform:none;letter-spacing:0">LAN play</span></h3>
           <div class="lanbox">
             <div style="font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)">Send them this link</div>
             <a id="lanLink" href="#">—</a>
             <div><button class="copy" id="copyLan">copy link</button></div>
           </div>
           <p class="note">
-            Everyone who opens it joins the same valley. Their browser finds the
-            relay automatically. Start both with
-            <code class="inline">npm run play</code> — that runs the relay and
-            serves the game to your whole network.
+            This section only applies if you cloned the repo and are running it
+            locally with <code class="inline">npm run play</code>. Everyone on
+            your wifi who opens the link joins the same valley, and their browser
+            finds your relay automatically. If you are just playing, ignore this
+            — use <b>host a world</b> above instead.
           </p>
         </div>
 
         <div class="sect">
           <h3>Invite an AI agent to play with you</h3>
           <p class="note">
-            The game ships an MCP server, so an agent can join this exact valley
-            as a real raptor — it moves, chats, and can hold a stream on a Moloch
-            beside you. Add this to your MCP config
+            An AI agent can join your world as a real raptor — it walks, chats,
+            and can hold a stream on a Moloch beside you. This part <em>does</em>
+            need a little setup, because the agent runs on your machine rather
+            than in the browser. Give your agent this config
             (Claude Code: <code class="inline">~/.claude.json</code>, or run
             <code class="inline">claude mcp add</code>):
           </p>
@@ -424,7 +426,7 @@
         </div>
 
         <button id="play">Enter the valley</button>
-        <div class="note" style="text-align:center">
+        <div class="note" id="footNote" style="text-align:center">
           Runs on WebGPU where available — the readout at top-left tells you which.
           Add <code class="inline">?webgl</code> to the URL to force the fallback.
         </div>

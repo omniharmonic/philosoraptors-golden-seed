@@ -135,6 +135,25 @@ export function setupGate(): void {
   const gameUrl = `${location.protocol}//${host}:${location.port || '5173'}/`;
   const relay = `ws://${host}:${RELAY_PORT}`;
 
+  /*
+   * Hide the developer-only sections when the page is served from the public
+   * web. A player who just opened a link has no terminal, no repo and no
+   * npm — showing them `npm run play` reads as "there is setup to do", which
+   * is exactly the wrong first impression when the honest answer is "click the
+   * button".
+   */
+  if (!isLocal) {
+    for (const el of document.querySelectorAll<HTMLElement>('.devOnly')) {
+      el.style.display = 'none';
+    }
+    const foot = document.getElementById('footNote');
+    if (foot) {
+      foot.innerHTML =
+        'Nothing to install and nothing to configure. <b>Host a world</b> for a ' +
+        'private link, or drop into one from <b>Open worlds</b> above.';
+    }
+  }
+
   const lan = document.getElementById('lanLink') as HTMLAnchorElement | null;
   if (lan) {
     lan.textContent = gameUrl;
