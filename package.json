@@ -1,0 +1,26 @@
+{
+  "name": "philosoraptors-golden-seed",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A voxel game about coordination. You cannot defeat Moloch alone \u2014 and the code enforces it.",
+  "scripts": {
+    "dev": "vite",
+    "server": "node server/server.mjs",
+    "play": "node server/server.mjs & vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/three": "^0.171.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  },
+  "dependencies": {
+    "three": "^0.171.0",
+    "ws": "^8.21.3"
+  },
+  "license": "MIT"
+}

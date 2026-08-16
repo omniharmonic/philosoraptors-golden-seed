@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Philosoraptors — The Golden Seed</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='%23ff9a2e'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23ffe9b0'/%3E%3C/svg%3E" />
+    <style>
+      :root {
+        --ember: #ff9a2e;
+        --flame: #ffb347;
+        --core: #ffe9b0;
+        --cold: #59819c;
+        --ink: #0d1016;
+        --panel: rgba(16, 12, 10, 0.72);
+        --edge: rgba(255, 200, 130, 0.22);
+        --text: #e9d6b6;
+        --dim: #a08965;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: var(--ink); color: var(--text);
+        -webkit-font-smoothing: antialiased;
+      }
+      canvas { display: block; }
+
+      #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+
+      /* ---- crosshair */
+      #cross {
+        position: absolute; left: 50%; top: 50%;
+        width: 18px; height: 18px; margin: -9px 0 0 -9px;
+        opacity: 0.75;
+      }
+      #cross::before, #cross::after {
+        content: ''; position: absolute; background: var(--core);
+        box-shadow: 0 0 6px rgba(255, 154, 46, 0.9);
+      }
+      #cross::before { left: 8px; top: 0; width: 2px; height: 18px; }
+      #cross::after { top: 8px; left: 0; height: 2px; width: 18px; }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--edge);
+        border-radius: 10px;
+        backdrop-filter: blur(9px);
+        padding: 10px 12px;
+      }
+
+      /* ---- top left: coherence */
+      #status { position: absolute; left: 16px; top: 16px; width: 268px; }
+      .bar { height: 9px; border-radius: 5px; background: rgba(255,255,255,.10); overflow: hidden; margin: 5px 0 2px; }
+      .bar > i { display: block; height: 100%; border-radius: 5px; transition: width .25s ease; }
+      #cohFill { background: linear-gradient(90deg, var(--cold), var(--ember), var(--core)); }
+      #spkFill { background: linear-gradient(90deg, #2f6f8f, #6fd8ff, var(--core));
+                 box-shadow: 0 0 10px rgba(111,216,255,.6); }
+      #beamHint { position: absolute; left: 50%; top: calc(50% + 34px);
+                  transform: translateX(-50%); font-size: 12px; letter-spacing: .06em;
+                  color: var(--core); text-shadow: 0 2px 10px #000, 0 0 18px rgba(255,154,46,.6);
+                  opacity: 0; transition: opacity .18s ease; white-space: nowrap; }
+      #objective { position: absolute; left: 50%; top: 18px; transform: translateX(-50%);
+                   text-align: center; max-width: 620px; pointer-events: none; }
+      #objMain { font-size: 15px; color: var(--core); letter-spacing: .03em;
+                 text-shadow: 0 2px 14px #000, 0 0 26px rgba(255,154,46,.5); }
+      #objSub { font-size: 11px; color: var(--ember); margin-top: 4px;
+                text-shadow: 0 2px 10px #000; }
+      .spell u { display: block; text-decoration: none; font-size: 8.5px;
+                 color: var(--text); opacity: .78; margin-top: 2px; line-height: 1.25; }
+      #molFill { background: linear-gradient(90deg, #4a4a4a, #7d4a4a, #b03a3a); }
+      #blindFill { background: linear-gradient(90deg, #2a3550, #55618a); }
+      .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; }
+      .k { color: var(--dim); letter-spacing: .08em; text-transform: uppercase; font-size: 9.5px; }
+      .v { color: var(--core); font-variant-numeric: tabular-nums; }
+      .sub { font-size: 10.5px; color: var(--dim); margin-top: 3px; line-height: 1.45; }
+
+      /* ---- self sigil */
+      #me { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+      #meSigil { width: 34px; height: 34px; border-radius: 7px; border: 1px solid var(--edge); background: #0a0c10; }
+      #meName { font-size: 13px; color: var(--core); letter-spacing: .04em; }
+      #meStage { font-size: 10px; color: var(--dim); }
+
+      /* ---- top right: chapter */
+      #chapter { position: absolute; right: 16px; top: 16px; width: 320px; }
+      #chTitle { font-size: 14px; color: var(--core); }
+      #chSub { font-size: 10px; color: var(--ember); letter-spacing: .1em; text-transform: uppercase; margin-top: 1px; }
+      #chObj { font-size: 11.5px; margin-top: 8px; line-height: 1.5; }
+      #chEpi { font-size: 10.5px; color: var(--dim); font-style: italic; margin-top: 8px; line-height: 1.5;
+               border-left: 2px solid var(--edge); padding-left: 8px; }
+
+      /* ---- seals */
+      #seals { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); width: 250px;
+               display: flex; flex-direction: column; gap: 8px; }
+      .seal { font-size: 11px; }
+      .sealHead { display: flex; justify-content: space-between; color: var(--core); }
+      .marks { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+      .mark { width: 20px; height: 20px; border-radius: 4px; background: #0a0c10; border: 1px solid var(--edge); }
+      .slot { width: 20px; height: 20px; border-radius: 4px; border: 1px dashed rgba(255,200,130,.28); }
+      .ttl { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+      /* ---- spellbook */
+      #spells { position: absolute; left: 50%; bottom: 92px; transform: translateX(-50%);
+                display: flex; gap: 6px; }
+      .spell { width: 60px; padding: 7px 4px; text-align: center; font-size: 9.5px;
+               background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+               color: var(--dim); line-height: 1.3; }
+      .spell.on { border-color: var(--ember); color: var(--core); box-shadow: 0 0 14px rgba(255,154,46,.28); }
+      .spell.locked { opacity: .35; }
+      .spell b { display: block; font-size: 13px; color: var(--core); margin-bottom: 2px; }
+      .spell.locked b { color: var(--dim); }
+      .spell i { display: block; font-style: normal; font-size: 8.5px; color: var(--ember); margin-top: 2px; }
+
+      /* ---- hotbar */
+      #hotbar { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+                display: flex; gap: 5px; }
+      .slotB { width: 54px; height: 54px; background: var(--panel); border: 1px solid var(--edge);
+               border-radius: 8px; position: relative; overflow: hidden; }
+      .slotB.on { border-color: var(--ember); box-shadow: 0 0 16px rgba(255,154,46,.35); }
+      .slotB canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+      .toolGlyph { width: 100%; height: 100%; display: grid; place-items: center;
+                   font-size: 26px; line-height: 1; }
+      .toolGlyph.claws { color: #d8c9a8; text-shadow: 0 0 10px rgba(255,233,176,.5); }
+      .toolGlyph.stream { color: #6fd8ff; text-shadow: 0 0 14px rgba(111,216,255,.8); }
+      .slotB span { position: absolute; left: 3px; top: 2px; font-size: 9px; color: var(--core);
+                    text-shadow: 0 1px 3px #000; }
+      .slotB em { position: absolute; right: 3px; bottom: 2px; font-size: 9px; font-style: normal;
+                  color: var(--core); text-shadow: 0 1px 3px #000; }
+
+      /* ---- log */
+      #log { position: absolute; left: 16px; bottom: 20px; width: 320px;
+             display: flex; flex-direction: column-reverse; gap: 4px; }
+      .line { font-size: 11px; padding: 5px 9px; background: var(--panel);
+              border-left: 2px solid var(--ember); border-radius: 0 6px 6px 0;
+              animation: fade 9s forwards; }
+      @keyframes fade { 0%,80% { opacity: 1 } 100% { opacity: 0 } }
+
+      /* ---- centre banner */
+      #banner { position: absolute; left: 50%; top: 34%; transform: translate(-50%,-50%);
+                text-align: center; opacity: 0; transition: opacity .6s ease; max-width: 620px; }
+      #banner.show { opacity: 1; }
+      #bTitle { font-size: 30px; letter-spacing: .06em; color: var(--core);
+                text-shadow: 0 0 28px rgba(255,154,46,.55); }
+      #bSub { font-size: 12px; color: var(--ember); letter-spacing: .22em;
+              text-transform: uppercase; margin-top: 8px; }
+      #bBody { font-size: 13px; color: var(--text); margin-top: 14px; font-style: italic; line-height: 1.6; }
+
+      /* ---- players */
+      #roster { position: absolute; left: 16px; top: 230px; width: 268px; }
+      .peer { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 6px; }
+      .peer canvas { width: 20px; height: 20px; border-radius: 4px; background: #0a0c10; }
+      .peer .d { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+      /* ---- start / pause overlay */
+      #gate { position: fixed; inset: 0; z-index: 50;
+              background: radial-gradient(ellipse at 50% 40%, #1a1410 0%, #06080c 70%);
+              /* html/body are overflow:hidden for the canvas, so the overlay
+                 must scroll itself or long content is simply unreachable. */
+              overflow-y: auto; overflow-x: hidden;
+              -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+              display: block; padding: 40px 20px 60px; }
+      #gate::-webkit-scrollbar { width: 10px; }
+      #gate::-webkit-scrollbar-thumb { background: rgba(255,200,130,.28); border-radius: 5px; }
+      #gate::-webkit-scrollbar-track { background: transparent; }
+      #gate.hidden { display: none; }
+      #gateBox { max-width: 760px; margin: 0 auto; padding: 8px 24px; text-align: center; }
+      .sect { margin-top: 34px; text-align: left; }
+      .sect h3 { font-size: 11px; letter-spacing: .24em; text-transform: uppercase;
+                 color: var(--ember); margin: 0 0 12px; font-weight: 400;
+                 border-bottom: 1px solid var(--edge); padding-bottom: 7px; }
+      .step { display: flex; gap: 12px; margin-bottom: 13px; font-size: 13px; line-height: 1.6; }
+      .step b.n { flex: 0 0 24px; height: 24px; border-radius: 50%;
+                  background: var(--ember); color: #241202; display: grid;
+                  place-items: center; font-size: 12px; }
+      pre.cfg { background: #0a0c10; border: 1px solid var(--edge); border-radius: 8px;
+                padding: 12px 14px; font-size: 11px; line-height: 1.55; color: var(--text);
+                overflow-x: auto; margin: 10px 0 0; text-align: left; }
+      pre.cfg .k { color: var(--ember); }
+      code.inline { background: #0a0c10; border: 1px solid var(--edge); border-radius: 4px;
+                    padding: 1px 6px; font-size: 11.5px; color: var(--core); }
+      .lanbox { background: rgba(255,154,46,.08); border: 1px solid var(--ember);
+                border-radius: 8px; padding: 14px 16px; margin-top: 10px; }
+      .lanbox a { color: var(--core); font-size: 17px; text-decoration: none;
+                  letter-spacing: .04em; pointer-events: auto; }
+      .lanbox a:hover { text-decoration: underline; }
+      .copy { pointer-events: auto; cursor: pointer; background: transparent;
+              border: 1px solid var(--edge); color: var(--dim); border-radius: 6px;
+              font: inherit; font-size: 10px; padding: 4px 10px; margin-top: 8px; }
+      .copy:hover { color: var(--core); border-color: var(--ember); }
+      .note { font-size: 11.5px; color: var(--dim); line-height: 1.6; margin-top: 8px; }
+      #gateBox h1 { font-size: 34px; margin: 0; letter-spacing: .08em; color: var(--core);
+                    text-shadow: 0 0 40px rgba(255,154,46,.4); font-weight: 600; }
+      #gateBox h2 { font-size: 11px; letter-spacing: .3em; text-transform: uppercase;
+                    color: var(--ember); margin: 12px 0 0; font-weight: 400; }
+      #gateBox p { font-size: 13px; line-height: 1.75; color: var(--text); margin: 22px 0 0; }
+      #gateBox .keys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 22px;
+                       margin: 26px 0 0; font-size: 11.5px; text-align: left; }
+      #gateBox .keys div { display: flex; justify-content: space-between; gap: 12px;
+                           border-bottom: 1px dashed rgba(255,200,130,.16); padding-bottom: 4px; }
+      #gateBox .keys b { color: var(--core); font-weight: 500; }
+      #gateBox .keys span { color: var(--dim); }
+      #play { margin-top: 30px; pointer-events: auto; cursor: pointer;
+              background: linear-gradient(180deg, var(--flame), var(--ember));
+              color: #241202; border: 0; border-radius: 10px; padding: 14px 34px;
+              font: inherit; font-size: 14px; letter-spacing: .12em; text-transform: uppercase;
+              box-shadow: 0 8px 30px rgba(255,154,46,.35); }
+      #play:hover { filter: brightness(1.08); }
+      #hint { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
+              font-size: 11px; color: var(--dim); }
+
+      /* ---- vignette that tightens with the blind spot */
+      #vig { position: fixed; inset: 0; pointer-events: none; z-index: 9;
+             box-shadow: inset 0 0 200px 40px rgba(6,10,20,0); transition: box-shadow .6s ease; }
+    </style>
+  </head>
+  <body>
+    <div id="vig"></div>
+    <div id="hud"></div>
+    <div id="gate">
+      <div id="gateBox">
+        <h1>The Golden Seed</h1>
+        <h2>A Philosoraptors story</h2>
+        <p>
+          You are a raptor on the Front Range, bare-scaled and alone, guarding a
+          small heap of glowing seeds against everyone else doing the same. That
+          arrangement has a name, and it is eating the valley.
+        </p>
+
+        <div class="sect">
+          <h3>How to play</h3>
+          <div class="step"><b class="n">1</b><span>
+            <b>Press 2 for the stream, then hold the left mouse button.</b> A
+            ribbon of light throws from your claws. Sweep it over grey, cracked
+            ground — life chases the end of it. That is how you earn
+            <b>coherence</b>, and it is the whole early game.
+            <br /><span style="color:var(--dim)">Press 1 for claws when you want
+            to break blocks instead, and 3–9 for materials to build with.</span>
+          </span></div>
+          <div class="step"><b class="n">2</b><span>
+            <b>Press V to call the flock.</b> Raptors who trust you fall in behind
+            and follow you around. The more coherence you have, the more of them
+            will come.
+          </span></div>
+          <div class="step"><b class="n">3</b><span>
+            <b>Find a Moloch and hold the stream on him.</b> It does <em>not</em>
+            hurt him — nothing does. It <b>tethers</b> him, and one stream is never
+            enough. Your flock throw their streams too. <b>Three at once</b> and
+            he is taken.
+          </span></div>
+          <p class="note">
+            There is a line at the top of the screen that always names the next
+            thing to do. If you are ever lost, read it and do that.
+          </p>
+        </div>
+
+        <div class="sect">
+          <h3>Hyperstition — the other way to win</h3>
+          <p class="note" style="font-size:13px;color:var(--text)">
+            A <b>hyperstition</b> is a fiction that makes itself true by being
+            acted upon. You <em>declare a future that is not real yet</em>, and it
+            becomes real only if enough others behave as though it already is.
+          </p>
+          <div class="step"><b class="n">H</b><span>
+            <b>Speak it.</b> Press <code class="inline">H</code> while a Moloch is
+            within 120m. You need <b>25 coherence</b> (or the Seed of Naming).
+            Press <code class="inline">J</code> first to cycle which claim you
+            will make — or type <code class="inline">/declare your own words</code>
+            into chat for a claim of your own.
+          </span></div>
+          <div class="step"><b class="n">Y</b><span>
+            <b>Align with one.</b> A hyperobject appears in the sky above the
+            Moloch, huge and barely visible — it is not real yet. Anyone nearby
+            presses <code class="inline">Y</code> to align with it. Each raptor
+            may align <b>once</b>. When enough have, the claim becomes true, the
+            hyperobject solidifies, and it binds the Moloch outright.
+          </span></div>
+          <p class="note">
+            So: <b>streams</b> hold one Moloch by brute co-presence.
+            <b>Hyperstition</b> takes longer to set up but needs no one to stand
+            in the same place at the same second — only to agree.
+          </p>
+        </div>
+
+        <div class="sect">
+          <h3>Controls</h3>
+          <p class="note" style="margin-bottom:12px">
+            <b>1–9 picks what is in your hands.</b> Slot 1 is your
+            <b>claws</b> (hold left mouse to break blocks), slot 2 is the
+            <b>stream</b>, and 3–9 are materials you can place with right mouse.
+            Scroll or Q/E cycles.
+          </p>
+          <div class="keys">
+            <div><b>W A S D</b><span>move</span></div>
+            <div><b>Space</b><span>jump · glide · fly</span></div>
+            <div><b>1 – 9</b><span>pick tool / block</span></div>
+            <div><b>Scroll · Q / E</b><span>cycle hotbar</span></div>
+            <div><b>Mouse L</b><span>use held tool</span></div>
+            <div><b>Mouse R</b><span>place block</span></div>
+            <div><b>V</b><span>call / dismiss flock</span></div>
+            <div><b>H</b><span>declare a hyperstition</span></div>
+            <div><b>J</b><span>cycle which claim</span></div>
+            <div><b>Y</b><span>align with a hyperobject</span></div>
+            <div><b>Z</b><span>cycle seal</span></div>
+            <div><b>C</b><span>open the selected seal</span></div>
+            <div><b>F</b><span>mark a nearby seal</span></div>
+            <div><b>G</b><span>roll belly-up</span></div>
+            <div><b>Enter</b><span>chat</span></div>
+            <div><b>T</b><span>collapse chat</span></div>
+            <div><b>Shift</b><span>sprint</span></div>
+            <div><b>Ctrl / C</b><span>crouch</span></div>
+            <div><b>M</b><span>mute</span></div>
+            <div><b>Esc</b><span>release cursor</span></div>
+          </div>
+        </div>
+
+        <div class="sect">
+          <h3>Play with people on your network</h3>
+          <div class="lanbox">
+            <div style="font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)">Send them this link</div>
+            <a id="lanLink" href="#">—</a>
+            <div><button class="copy" id="copyLan">copy link</button></div>
+          </div>
+          <p class="note">
+            Everyone who opens it joins the same valley. Their browser finds the
+            relay automatically. Start both with
+            <code class="inline">npm run play</code> — that runs the relay and
+            serves the game to your whole network.
+          </p>
+        </div>
+
+        <div class="sect">
+          <h3>Invite an AI agent to play with you</h3>
+          <p class="note">
+            The game ships an MCP server, so an agent can join this exact valley
+            as a real raptor — it moves, chats, and can hold a stream on a Moloch
+            beside you. Add this to your MCP config
+            (Claude Code: <code class="inline">~/.claude.json</code>, or run
+            <code class="inline">claude mcp add</code>):
+          </p>
+          <pre class="cfg" id="mcpCfg">—</pre>
+          <button class="copy" id="copyMcp">copy config</button>
+          <p class="note">
+            Then tell your agent: <em>"join the valley, look around, and help me
+            take a Moloch."</em> It gets tools for
+            <code class="inline">join</code>, <code class="inline">look</code>,
+            <code class="inline">move</code>, <code class="inline">say</code>,
+            <code class="inline">beam</code>,
+            <code class="inline">speak_hyperstition</code> and
+            <code class="inline">align</code>.
+            <br /><br />
+            <b>Agents on other machines:</b> set
+            <code class="inline">PHILO_RELAY</code> to
+            <code class="inline" id="relayUrl">—</code> in the config's
+            <code class="inline">env</code> block so they reach your relay
+            instead of their own localhost.
+          </p>
+        </div>
+
+        <button id="play">Enter the valley</button>
+        <div class="note" style="text-align:center">
+          Runs on WebGPU where available — the readout at top-left tells you which.
+          Add <code class="inline">?webgl</code> to the URL to force the fallback.
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

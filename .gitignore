@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+mcp/node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# macOS / iCloud
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# local env / secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# playtest + tooling artefacts
+.playwright-mcp/
+*.png
+!docs/**/*.png
+.vercel
