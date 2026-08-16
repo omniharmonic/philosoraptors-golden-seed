@@ -14,26 +14,29 @@ WebSocket server, and `edge/worker.js` wraps it in a Cloudflare Durable Object.
 
 ---
 
-## The 2-minute version
+## It is already live
+
+**https://philosoraptors.philosoraptors-golden-seed.workers.dev**
+
+Open it, click **host a world**, and send the link you land on to anyone.
+
+## Deploying your own
 
 You need a free Cloudflare account. No card.
 
 ```bash
 npm install
 npx wrangler login          # opens a browser once
-npx wrangler deploy         # prints your worker URL
+npm run edge:deploy         # builds the game and ships everything
 ```
 
-That prints something like `https://philosoraptors.<you>.workers.dev`. Put that
-URL into `EDGE_RELAY` in `src/net/protocol.ts`, then publish the game itself:
+That is the whole thing. The game and the relay are ONE worker: static files
+are served directly, and anything that is not a file (`/new`, `/w/<CODE>`)
+falls through to the relay. So the WebSocket is same-origin as the page —
+nothing to configure, no CORS, and no second URL to get wrong.
 
-```bash
-npm run build
-npx wrangler pages deploy dist --project-name philosoraptors
-```
-
-Now anyone can open your page, click **host a world**, and send the link to
-whoever they like. That is the whole thing.
+You do not need to edit `EDGE_RELAY`; it defaults to the origin the page was
+served from, so a fork deployed to your own account works untouched.
 
 ---
 

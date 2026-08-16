@@ -161,7 +161,17 @@ export const RELAY_PORT = 8787;
  * The last case is what makes LAN play configuration-free: whoever opens the
  * page finds the relay on the same host they loaded it from.
  */
-export const EDGE_RELAY = 'https://philosoraptors.omniharmonic.workers.dev';
+/**
+ * Where hosted worlds live.
+ *
+ * Empty means "same origin as the page", which is the normal case: the game and
+ * the relay are one Worker, so a fork deployed to anyone else's account works
+ * with no edit. Set it only to point a page at someone else's relay.
+ */
+export const EDGE_RELAY = '';
+
+const edgeBase = (loc: Location): string =>
+  (EDGE_RELAY || `${loc.protocol}//${loc.host}`).replace(/\/$/, '');
 
 export function resolveRelay(loc: Location = location): { url: string; code: string | null; hosted: boolean } {
   const q = new URLSearchParams(loc.search);
@@ -171,11 +181,20 @@ export function resolveRelay(loc: Location = location): { url: string; code: str
 
   const code = q.get('w');
   if (code) {
-    const base = (q.get('edge') || EDGE_RELAY).replace(/^http/, 'ws').replace(/\/$/, '');
+    const base = (q.get('edge') || edgeBase(loc)).replace(/^http/, 'ws');
     return { url: `${base}/w/${encodeURIComponent(code.toUpperCase())}`, code: code.toUpperCase(), hosted: true };
   }
 
   const host = loc.hostname || 'localhost';
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || /^\d+\.\d+\.\d+\.\d+$/.test(host);
+
+  // A page served from the public web has no relay on port 8787 to find, and
+  // dialling one just produces a failed connection on every load. Play solo
+  // until the player hosts or joins a world.
+  if (!isLocal && loc.protocol === 'https:') {
+    return { url: '', code: null, hosted: false };
+  }
+
   const scheme = loc.protocol === 'https:' ? 'wss' : 'ws';
   return { url: `${scheme}://${host}:${RELAY_PORT}`, code: null, hosted: false };
 }

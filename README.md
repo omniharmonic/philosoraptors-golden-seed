@@ -1,5 +1,9 @@
 # Philosoraptors — The Golden Seed
 
+**Play it: https://philosoraptors.philosoraptors-golden-seed.workers.dev**
+
+Click *host a world* and send the link to anyone. No install, no account.
+
 A browser voxel game on the Colorado Front Range, built in TypeScript and
 three.js. You play a bare-scaled velociraptor at the foot of the Flatirons,
 guarding a small heap of glowing seeds against everyone else doing the same.

@@ -193,6 +193,11 @@ export class Net {
    * WebSocket noise would train players to ignore the console.
    */
   connect(url: string = resolveRelay().url): void {
+    if (!url) {
+      // No relay applies to this page (public origin, no world code).
+      this.events.onStatus?.('Playing solo — host a world to invite people.');
+      return;
+    }
     if (this.ws) return;
     this.closing = false;
     let ws: WebSocket;

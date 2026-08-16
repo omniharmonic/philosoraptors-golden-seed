@@ -51,7 +51,7 @@ async function setupWorlds(): Promise<void> {
   hostBtn.addEventListener('click', async () => {
     statusEl.textContent = 'Asking the edge for a world code…';
     try {
-      const res = await fetch(`${EDGE_RELAY}/new`, { method: 'POST' });
+      const res = await fetch(`${EDGE_RELAY || ''}/new`, { method: 'POST' });
       if (!res.ok) throw new Error(String(res.status));
       const { code } = (await res.json()) as { code: string };
       location.href = shareUrl(code);

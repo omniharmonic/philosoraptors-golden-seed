@@ -4,9 +4,19 @@
   "main": "edge/worker.js",
   "compatibility_date": "2025-01-01",
 
-  // Durable Objects are available on the Workers FREE plan, but only with the
-  // SQLite storage backend — hence new_sqlite_classes below rather than
-  // new_classes. One object per world code.
+  // The game and the relay ship as ONE worker. Static files are served
+  // directly; anything that is not a file (/new, /w/<CODE>) falls through to
+  // the worker. That means the WebSocket is same-origin as the page, so there
+  // is no CORS to configure and no second URL for a player to get wrong.
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  // Durable Objects are on the Workers FREE plan, but only with the SQLite
+  // backend — hence new_sqlite_classes rather than new_classes.
+  // One object per world code.
   "durable_objects": {
     "bindings": [{ "name": "VALLEY", "class_name": "Valley" }]
   },
