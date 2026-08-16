@@ -983,16 +983,27 @@ function doorway(s: Site, b: VillageBuilding): void {
   }
   for (let k = -1; k <= 2; k++) s.w.set(px + tx * k, y + 4, pz + tz * k, PALE_TIMBER);
 
-  // Awning on two posts, and the lantern every house is lit by at dusk.
+  /*
+   * Porch: an awning on two posts, and the lantern every house is lit by.
+   *
+   * The posts stand at the FLANKS of the opening. They used to stand at
+   * `px + nx*2` and `px + tx + nx*2` — which is directly in front of both lanes
+   * of the two-wide door, at body height. Every front door in the game was
+   * fenced off by its own porch, and you had to walk around the posts to get
+   * out. The awning is widened to span the flanks so it still has something to
+   * rest on.
+   */
   for (let o = 1; o <= 2; o++) {
-    s.w.set(px + nx * o, y + 4, pz + nz * o, WOVEN_MAT);
-    s.w.set(px + tx + nx * o, y + 4, pz + tz + nz * o, WOVEN_MAT);
+    for (let k = -1; k <= 2; k++) {
+      s.w.set(px + tx * k + nx * o, y + 4, pz + tz * k + nz * o, WOVEN_MAT);
+    }
   }
   for (let h = 1; h <= 3; h++) {
-    s.w.set(px + nx * 2, y + h, pz + nz * 2, PALE_TIMBER);
-    s.w.set(px + tx + nx * 2, y + h, pz + tz + nz * 2, PALE_TIMBER);
+    s.w.set(px - tx + nx * 2, y + h, pz - tz + nz * 2, PALE_TIMBER);
+    s.w.set(px + tx * 2 + nx * 2, y + h, pz + tz * 2 + nz * 2, PALE_TIMBER);
   }
-  s.w.set(px - tx + nx * 2, y + 3, pz - tz + nz * 2, LANTERN);
+  // Hangs under the awning, above head height, clear of the way out.
+  s.w.set(px + nx, y + 3, pz + nz, LANTERN);
 }
 
 /** Cottage, longhouse and greenhouse share one rectangular shell. */
