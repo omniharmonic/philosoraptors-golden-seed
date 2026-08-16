@@ -212,7 +212,12 @@ export class Net {
     ws.onopen = () => {
       this.connected = true;
       this.events.onStatus?.('Connected to the flock.');
-      this.send({ t: 'hello', id: this.id, name: this.sigil.name, hue: this.sigil.hue });
+      // Carry our seed so an empty world adopts the landscape its creator chose.
+      const seedParam = new URLSearchParams(location.search).get('seed');
+      this.send({
+        t: 'hello', id: this.id, name: this.sigil.name, hue: this.sigil.hue,
+        ...(seedParam ? { seed: Number(seedParam) } : {}),
+      });
     };
 
     ws.onerror = () => {

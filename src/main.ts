@@ -24,7 +24,7 @@ import { Flock } from './entities/Flock';
 import { Net } from './net/Net';
 import { HUD } from './ui/HUD';
 import { Chat } from './ui/Chat';
-import { setupGate } from './ui/gate';
+import { Title } from './ui/Title';
 import { MiniMap } from './ui/MiniMap';
 import { RightPanel } from './ui/RightPanel';
 import { Menu, loadOptions, type GameOptions } from './ui/Menu';
@@ -41,7 +41,20 @@ import { SKY_COLD, SKY_WARM, FOG_COLD, FOG_WARM, hexToRgb, mixRgb, rgbToHex } fr
 
 // ---------------------------------------------------------------- boot
 
-const SEED = 20260816;
+/**
+ * The world seed.
+ *
+ * Terrain is generated identically on every client from this number, which is
+ * why the relay never sends any of it. `?seed=` lets a world be created with a
+ * chosen landscape; the authority adopts whatever the first arrival brings and
+ * tells later arrivals the real one.
+ */
+const DEFAULT_SEED = 20260816;
+const SEED = (() => {
+  const q = new URLSearchParams(location.search).get('seed');
+  const n = q ? Number(q) : NaN;
+  return Number.isFinite(n) && n > 0 ? n >>> 0 : DEFAULT_SEED;
+})();
 const atlas = buildAtlas();
 
 /**
@@ -181,6 +194,16 @@ rightPanel.showMap();
 const net = new Net({
   onStatus: (t) => hud.log(t),
   onWelcome: (w) => {
+    // The world already had a seed and it is not ours: our terrain is wrong and
+    // nothing can fix that in place, because chunks are already generated and
+    // meshed. Reload onto the correct landscape rather than let two players
+    // stand in visibly different worlds.
+    if (w.seed && w.seed !== SEED) {
+      const u = new URL(location.href);
+      u.searchParams.set('seed', String(w.seed));
+      location.replace(u.toString());
+      return;
+    }
     moloch.pressure = w.molochPressure;
     molochs.isAuthority = w.authority;
     molochs.sync(w.molochs);
@@ -907,17 +930,15 @@ function applyOptions(o: GameOptions): void {
 
 const menu = new Menu(applyOptions, () => {
   // Closing the menu hands the pointer back, after the browser's cooldown.
+  // Before the game starts there is nothing to hand it back to.
   if (started) setTimeout(() => renderer.domElement.requestPointerLock(), 120);
 });
 
-setupGate();
-
 const gate = document.getElementById('gate')!;
 const resumeHint = document.getElementById('resume')!;
-const playBtn = document.getElementById('play')!;
 let started = false;
 
-playBtn.addEventListener('click', () => {
+function enterWorld(): void {
   gate.classList.add('hidden');
   renderer.domElement.requestPointerLock();
   if (!started) {
@@ -928,7 +949,10 @@ playBtn.addEventListener('click', () => {
     motif.start();
     motif.play('question');
   }
-});
+}
+
+const title = new Title(menu, enterWorld);
+void title;
 
 /**
  * "Pointer lock lost" is NOT the same event as "player paused", and treating

@@ -159,6 +159,16 @@ export class Menu {
   get isOpen(): boolean { return this.root.classList.contains('show'); }
 
   open(): void { this.root.classList.add('show'); this.render(); }
+
+  /**
+   * Open on a specific tab. The title screen uses this so "Controls" and
+   * "How to play" are the SAME content the in-game menu shows — previously the
+   * entry screen had its own copy, which drifted every time the keys changed.
+   */
+  openAt(tab: 'controls' | 'help' | 'options'): void {
+    this.tab = tab;
+    this.open();
+  }
   close(): void { this.root.classList.remove('show'); this.onClose(); }
   toggle(): void { this.isOpen ? this.close() : this.open(); }
 

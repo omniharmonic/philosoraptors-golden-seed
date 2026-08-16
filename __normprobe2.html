@@ -1,0 +1,64 @@
+<!doctype html><meta charset="utf-8"><title>normprobe2</title>
+<script type="module">
+import * as THREE from 'three';
+import { WebGPURenderer } from 'three/webgpu';
+
+const renderer = new WebGPURenderer({ antialias: false });
+await renderer.init();
+renderer.setSize(64, 64);
+
+const rt = new THREE.RenderTarget(64, 64);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 100);
+camera.position.z = 3;
+
+// Small checker texture so `map` sampling is exercised like the atlas is.
+const data = new Uint8Array(4 * 4 * 4);
+for (let i = 0; i < 16; i++) {
+  const on = ((i % 4) + (i >> 2)) % 2 === 0;
+  data[i*4] = on ? 220 : 40; data[i*4+1] = on ? 160 : 90;
+  data[i*4+2] = on ? 60 : 200; data[i*4+3] = 255;
+}
+const tex = new THREE.DataTexture(data, 4, 4);
+tex.needsUpdate = true;
+
+function geo() {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+    -1,-1,0, 1,-1,0, 1,1,0, -1,1,0,
+  ]), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0,0, 1,0, 1,1, 0,1]), 2));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array([
+    1,0.3,0.2,  0.2,1,0.4,  0.3,0.4,1,  0.9,0.9,0.5,
+  ]), 3));
+  g.setIndex([0,1,2, 0,2,3]);
+  return g;  // no 'normal'
+}
+
+async function shot(noLightsFlag) {
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x1f3241, 40, 260);
+  scene.add(new THREE.HemisphereLight(0xcfe4f5, 0x4a3a28, 1.5));
+  const d = new THREE.DirectionalLight(0xffe0b0, 1.35); d.position.set(-60,90,30); scene.add(d);
+  scene.add(new THREE.PointLight(0xffb347, 2.2, 18, 1.6));
+  const m = new THREE.MeshBasicMaterial({ map: tex, vertexColors: true, alphaTest: 0.5, fog: true });
+  if (noLightsFlag) m.lights = false;
+  scene.add(new THREE.Mesh(geo(), m));
+  renderer.setRenderTarget(rt);
+  await renderer.renderAsync(scene, camera);
+  const buf = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, 64, 64);
+  renderer.setRenderTarget(null);
+  return new Uint8Array(buf.buffer ? buf.buffer.slice(0) : buf);
+}
+
+const withLights = await shot(false);
+const withoutLights = await shot(true);
+let maxDiff = 0, nDiff = 0;
+for (let i = 0; i < withLights.length; i++) {
+  const d = Math.abs(withLights[i] - withoutLights[i]);
+  if (d > 0) nDiff++;
+  if (d > maxDiff) maxDiff = d;
+}
+const nonBlack = withLights.filter((v, i) => i % 4 !== 3 && v > 0).length;
+console.log('@@RESULT ' + JSON.stringify({ maxDiff, nDiff, nonBlackChannels: nonBlack,
+  sample: Array.from(withLights.slice(64*32*4, 64*32*4+8)) }));
+</script>

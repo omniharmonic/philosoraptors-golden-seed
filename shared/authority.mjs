@@ -20,8 +20,18 @@
 /**
  * World seed. Every client generates the same terrain from this, which is why
  * the authority never has to send any of it.
+ *
+ * Adopted from the FIRST player to arrive, then fixed for the life of the
+ * world; later arrivals are told the real seed and reload if theirs differs.
+ * That is what lets a world be created with a chosen landscape.
+ *
+ * NOTE ON STATE: everything in this module is module-scoped, which is only safe
+ * because each Durable Object gets its own isolate. Verified empirically — two
+ * worlds do not see each other's chat or Molochs. If that ever changes, this
+ * whole file needs wrapping in a class instantiated per object.
  */
-const SEED = 20260816;
+let SEED = 20260816;
+let seedLocked = false;
 
 // ---------------------------------------------------------------- state
 
@@ -69,7 +79,8 @@ function hash(n) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-const goldenSeeds = SEED_POWERS.map((p, i) => {
+function deriveGoldenSeeds() {
+  return SEED_POWERS.map((p, i) => {
   const a = hash(i * 7 + 1) * Math.PI * 2;
   const r = 240 + hash(i * 13 + 5) * 1500;
   return {
@@ -79,9 +90,25 @@ const goldenSeeds = SEED_POWERS.map((p, i) => {
     grants: p.grants,
     x: Math.round(Math.cos(a) * r),
     z: Math.round(Math.sin(a) * r),
-    claimedBy: null,
-  };
-});
+      claimedBy: null,
+    };
+  });
+}
+
+let goldenSeeds = deriveGoldenSeeds();
+
+/** Fix the world's seed. Only the first caller wins. */
+function adoptSeed(n) {
+  if (seedLocked) return;
+  seedLocked = true;
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return;
+  SEED = v >>> 0;
+  world.seed = SEED;
+  // The Golden Seeds are placed from the world seed, so a different landscape
+  // must hide them in different places.
+  goldenSeeds = deriveGoldenSeeds();
+}
 
 // ---------------------------------------------------------------- helpers
 
@@ -376,6 +403,7 @@ export function handleMessage(id, m) {
   {
     switch (m.t) {
       case 'hello': {
+        adoptSeed(m.seed);
         players.set(id, {
           name: m.name, hue: m.hue ?? 40, agent: !!m.agent,
           x: m.x ?? 0, y: m.y ?? 60, z: m.z ?? 0, yaw: 0,

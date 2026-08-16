@@ -151,73 +151,85 @@
       .peer canvas { width: 20px; height: 20px; border-radius: 4px; background: #0a0c10; }
       .peer .d { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; }
 
-      /* ---- start / pause overlay */
+      /* ---- title screen */
       #gate { position: fixed; inset: 0; z-index: 50;
-              background: radial-gradient(ellipse at 50% 40%, #1a1410 0%, #06080c 70%);
-              /* html/body are overflow:hidden for the canvas, so the overlay
-                 must scroll itself or long content is simply unreachable. */
-              overflow-y: auto; overflow-x: hidden;
-              -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-              display: block; padding: 40px 20px 60px; }
+              background: radial-gradient(ellipse at 50% 35%, #1a1410 0%, #06080c 72%);
+              overflow-y: auto; overscroll-behavior: contain; padding: 40px 20px 60px; }
+      #gate.hidden { display: none; }
       #gate::-webkit-scrollbar { width: 10px; }
       #gate::-webkit-scrollbar-thumb { background: rgba(255,200,130,.28); border-radius: 5px; }
-      #gate::-webkit-scrollbar-track { background: transparent; }
-      #gate.hidden { display: none; }
-      #gateBox { max-width: 760px; margin: 0 auto; padding: 8px 24px; text-align: center; }
-      .sect { margin-top: 34px; text-align: left; }
-      .sect h3 { font-size: 11px; letter-spacing: .24em; text-transform: uppercase;
-                 color: var(--ember); margin: 0 0 12px; font-weight: 400;
-                 border-bottom: 1px solid var(--edge); padding-bottom: 7px; }
-      .step { display: flex; gap: 12px; margin-bottom: 13px; font-size: 13px; line-height: 1.6; }
-      .step b.n { flex: 0 0 24px; height: 24px; border-radius: 50%;
-                  background: var(--ember); color: #241202; display: grid;
-                  place-items: center; font-size: 12px; }
-      pre.cfg { background: #0a0c10; border: 1px solid var(--edge); border-radius: 8px;
-                padding: 12px 14px; font-size: 11px; line-height: 1.55; color: var(--text);
-                overflow-x: auto; margin: 10px 0 0; text-align: left; }
-      pre.cfg .k { color: var(--ember); }
-      code.inline { background: #0a0c10; border: 1px solid var(--edge); border-radius: 4px;
-                    padding: 1px 6px; font-size: 11.5px; color: var(--core); }
-      .lanbox { background: rgba(255,154,46,.08); border: 1px solid var(--ember);
-                border-radius: 8px; padding: 14px 16px; margin-top: 10px; }
-      .lobbyRow { pointer-events: auto; cursor: pointer; display: flex; gap: 12px; width: 100%;
-                  align-items: baseline; text-align: left; background: #0a0c10;
-                  border: 1px solid var(--edge); border-radius: 8px; padding: 9px 12px;
-                  margin-bottom: 6px; font: inherit; color: var(--text); }
-      .lobbyRow:hover { border-color: var(--ember); }
-      .lobbyRow .lname { color: var(--core); font-size: 13px; flex: 1 1 auto; }
-      .lobbyRow .lcode { color: var(--ember); font-size: 12px; letter-spacing: .14em; }
-      .lobbyRow .lmeta { color: var(--dim); font-size: 10.5px; flex: 0 0 100%; }
-      .worldLink { color: var(--core); font-size: 12px; word-break: break-all; }
-      .lanbox a { color: var(--core); font-size: 17px; text-decoration: none;
-                  letter-spacing: .04em; pointer-events: auto; }
-      .lanbox a:hover { text-decoration: underline; }
-      .copy { pointer-events: auto; cursor: pointer; background: transparent;
-              border: 1px solid var(--edge); color: var(--dim); border-radius: 6px;
-              font: inherit; font-size: 10px; padding: 4px 10px; margin-top: 8px; }
-      .copy:hover { color: var(--core); border-color: var(--ember); }
-      .note { font-size: 11.5px; color: var(--dim); line-height: 1.6; margin-top: 8px; }
-      #gateBox h1 { font-size: 34px; margin: 0; letter-spacing: .08em; color: var(--core);
-                    text-shadow: 0 0 40px rgba(255,154,46,.4); font-weight: 600; }
-      #gateBox h2 { font-size: 11px; letter-spacing: .3em; text-transform: uppercase;
-                    color: var(--ember); margin: 12px 0 0; font-weight: 400; }
-      #gateBox p { font-size: 13px; line-height: 1.75; color: var(--text); margin: 22px 0 0; }
-      #gateBox .keys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 22px;
-                       margin: 26px 0 0; font-size: 11.5px; text-align: left; }
-      #gateBox .keys div { display: flex; justify-content: space-between; gap: 12px;
-                           border-bottom: 1px dashed rgba(255,200,130,.16); padding-bottom: 4px; }
-      #gateBox .keys b { color: var(--core); font-weight: 500; }
-      #gateBox .keys span { color: var(--dim); }
-      #play { margin-top: 30px; pointer-events: auto; cursor: pointer;
-              background: linear-gradient(180deg, var(--flame), var(--ember));
-              color: #241202; border: 0; border-radius: 10px; padding: 14px 34px;
-              font: inherit; font-size: 14px; letter-spacing: .12em; text-transform: uppercase;
-              box-shadow: 0 8px 30px rgba(255,154,46,.35); }
-      #play:hover { filter: brightness(1.08); }
-      #hint { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
-              font-size: 11px; color: var(--dim); }
 
-      /* ---- vignette that tightens with the blind spot */
+      .tScreen { max-width: 560px; margin: 0 auto; text-align: center;
+                 pointer-events: auto; position: relative; }
+      .tTitle { font-size: 44px; margin: 12px 0 0; letter-spacing: .07em; font-weight: 600;
+                color: var(--core); text-shadow: 0 0 46px rgba(255,154,46,.45); }
+      .tSub { font-size: 10.5px; letter-spacing: .34em; text-transform: uppercase;
+              color: var(--ember); margin-top: 10px; }
+      .tWorldTag { margin-top: 14px; font-size: 12px; color: var(--dim); }
+      .tWorldTag b { color: var(--core); letter-spacing: .2em; }
+      .tBlurb { font-size: 13px; line-height: 1.75; color: var(--text);
+                margin: 22px auto 0; max-width: 460px; }
+      .tHead { font-size: 22px; color: var(--core); margin: 4px 0 22px; letter-spacing: .04em; font-weight: 500; }
+
+      .tMenu { display: flex; flex-direction: column; gap: 9px; margin: 28px auto 0; max-width: 340px; }
+      .tBig, .tBtn {
+        pointer-events: auto; cursor: pointer; font: inherit; width: 100%;
+        border-radius: 10px; padding: 13px 18px; letter-spacing: .1em; }
+      .tBig { background: linear-gradient(180deg, var(--flame), var(--ember));
+              color: #241202; border: 0; font-size: 14px; text-transform: uppercase;
+              box-shadow: 0 8px 30px rgba(255,154,46,.32); }
+      .tBig:hover { filter: brightness(1.08); }
+      .tBtn { background: rgba(16,12,10,.6); border: 1px solid var(--edge);
+              color: var(--text); font-size: 12.5px; }
+      .tBtn:hover { border-color: var(--ember); color: var(--core); }
+      .tBack { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer;
+               background: transparent; border: 0; color: var(--dim); font: inherit;
+               font-size: 12px; padding: 4px 6px; }
+      .tBack:hover { color: var(--core); }
+      .tFoot { font-size: 11.5px; color: var(--dim); line-height: 1.6; margin-top: 26px; }
+      .tFoot code { background: #0a0c10; border: 1px solid var(--edge); border-radius: 4px;
+                    padding: 1px 5px; color: var(--core); font-size: 11px; }
+
+      .tForm { display: flex; flex-direction: column; gap: 16px; text-align: left;
+               max-width: 400px; margin: 0 auto; }
+      .tForm label { font-size: 12.5px; color: var(--core); display: flex; flex-direction: column; gap: 5px; }
+      .tForm label em { font-style: normal; font-size: 10.5px; color: var(--dim); }
+      .tForm input[type=text], .tForm input:not([type]) {
+        pointer-events: auto; background: #0a0c10; border: 1px solid var(--edge);
+        border-radius: 8px; color: var(--core); font: inherit; font-size: 13px; padding: 9px 12px; }
+      .tForm input:focus { outline: 0; border-color: var(--ember); }
+      .tCheck { flex-direction: row !important; align-items: flex-start; gap: 10px !important;
+                cursor: pointer; pointer-events: auto; }
+      .tCheck input { pointer-events: auto; accent-color: var(--ember); margin-top: 2px; }
+      .tCheck span { display: flex; flex-direction: column; gap: 3px; }
+
+      .tJoinRow { display: flex; gap: 8px; max-width: 400px; margin: 0 auto 26px; }
+      .tJoinRow input { flex: 1 1 auto; pointer-events: auto; background: #0a0c10;
+                        border: 1px solid var(--edge); border-radius: 8px; color: var(--core);
+                        font: inherit; font-size: 15px; padding: 10px 14px;
+                        text-transform: uppercase; letter-spacing: .2em; text-align: center; }
+      .tJoinRow input:focus { outline: 0; border-color: var(--ember); }
+      .tJoinRow .tBtn { width: auto; padding: 10px 20px; }
+
+      .tListHead { display: flex; align-items: center; gap: 10px; max-width: 400px;
+                   margin: 0 auto 10px; font-size: 10px; letter-spacing: .22em;
+                   text-transform: uppercase; color: var(--ember); }
+      .tListHead span { flex: 1 1 auto; text-align: left; }
+      .tMini { pointer-events: auto; cursor: pointer; background: transparent;
+               border: 1px solid var(--edge); border-radius: 6px; color: var(--dim);
+               font: inherit; font-size: 9.5px; padding: 3px 9px; letter-spacing: .1em; }
+      .tMini:hover { color: var(--core); border-color: var(--ember); }
+      .tList { max-width: 400px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
+      .tWorld { pointer-events: auto; cursor: pointer; display: grid;
+                grid-template-columns: 1fr auto; gap: 2px 12px; text-align: left;
+                background: #0a0c10; border: 1px solid var(--edge); border-radius: 9px;
+                padding: 11px 14px; font: inherit; color: var(--text); }
+      .tWorld:hover { border-color: var(--ember); }
+      .tWorld.busy { border-color: rgba(255,154,46,.5); }
+      .tWorld .wName { color: var(--core); font-size: 13.5px; }
+      .tWorld .wCode { color: var(--ember); font-size: 12px; letter-spacing: .16em; }
+      .tWorld .wMeta { grid-column: 1 / -1; color: var(--dim); font-size: 10.5px; }
+
       #resume { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%);
                 z-index: 40; padding: 12px 22px; border-radius: 10px;
                 background: var(--panel); border: 1px solid var(--ember);
@@ -233,205 +245,7 @@
     <div id="vig"></div>
     <div id="hud"></div>
     <div id="resume">click to resume</div>
-    <div id="gate">
-      <div id="gateBox">
-        <h1>The Golden Seed</h1>
-        <h2>A Philosoraptors story</h2>
-        <p>
-          You are a raptor on the Front Range, bare-scaled and alone, guarding a
-          small heap of glowing seeds against everyone else doing the same. That
-          arrangement has a name, and it is eating the valley.
-        </p>
-
-        <div class="sect">
-          <h3>How to play</h3>
-          <div class="step"><b class="n">1</b><span>
-            <b>Press 2 for the stream, then hold the left mouse button.</b> A
-            ribbon of light throws from your claws. Sweep it over grey, cracked
-            ground — life chases the end of it. That is how you earn
-            <b>coherence</b>, and it is the whole early game.
-            <br /><span style="color:var(--dim)">Press 1 for claws when you want
-            to break blocks instead, and 3–9 for materials to build with.</span>
-          </span></div>
-          <div class="step"><b class="n">2</b><span>
-            <b>Press V to call the flock.</b> Raptors who trust you fall in behind
-            and follow you around. The more coherence you have, the more of them
-            will come.
-          </span></div>
-          <div class="step"><b class="n">3</b><span>
-            <b>Find a Moloch and hold the stream on him.</b> It does <em>not</em>
-            hurt him — nothing does. It <b>tethers</b> him, and one stream is never
-            enough. Your flock throw their streams too. <b>Three at once</b> and
-            he is taken.
-          </span></div>
-          <p class="note">
-            There is a line at the top of the screen that always names the next
-            thing to do. If you are ever lost, read it and do that.
-          </p>
-        </div>
-
-        <div class="sect">
-          <h3>Hyperstition — the other way to win</h3>
-          <p class="note" style="font-size:13px;color:var(--text)">
-            A <b>hyperstition</b> is a fiction that makes itself true by being
-            acted upon. You <em>declare a future that is not real yet</em>, and it
-            becomes real only if enough others behave as though it already is.
-          </p>
-          <div class="step"><b class="n">H</b><span>
-            <b>Speak it.</b> Press <code class="inline">J</code> to cycle through
-            the declarations — <em>The Ground Returns</em>, <em>Preening</em>,
-            <em>The Weave That Catches</em>, up to <em>The Golden Seed</em> — then
-            <code class="inline">H</code> to speak the one you have selected. The
-            bar along the bottom shows them all and what each does. Some need
-            coherence; one is spoken at a Moloch. Type
-            <code class="inline">/declare your own words</code> in chat to word it
-            yourself.
-          </span></div>
-          <div class="step"><b class="n">Y</b><span>
-            <b>Align with one.</b> A hyperobject appears in the sky above the
-            Moloch, huge and barely visible — it is not real yet. Anyone nearby
-            presses <code class="inline">Y</code> to align with it. Each raptor
-            may align <b>once</b>. When enough have, the claim becomes true, the
-            hyperobject solidifies, and it binds the Moloch outright.
-          </span></div>
-          <p class="note">
-            This is the <em>only</em> commitment mechanic in the game. Everything
-            that needs more than one raptor — healing a valley, bridging a gap,
-            binding a Moloch, planting the Golden Seed — is a declaration someone
-            speaks and others make true.
-            <br /><br />
-            So: <b>streams</b> hold one Moloch by brute co-presence, in the same
-            second. <b>Declarations</b> take longer to set up but need only
-            agreement.
-          </p>
-        </div>
-
-        <div class="sect">
-          <h3>Controls</h3>
-          <p class="note" style="margin-bottom:12px">
-            <b>1–9 picks what is in your hands.</b> Slot 1 is your
-            <b>claws</b> (hold left mouse to break blocks), slot 2 is the
-            <b>stream</b>, and 3–9 are materials you can place with right mouse.
-            Scroll or Q/E cycles.
-          </p>
-          <div class="keys">
-            <div><b>W A S D</b><span>move</span></div>
-            <div><b>Space</b><span>jump · glide · fly</span></div>
-            <div><b>1 – 9</b><span>pick tool / block</span></div>
-            <div><b>Scroll · Q / E</b><span>cycle hotbar</span></div>
-            <div><b>Mouse L</b><span>use held tool</span></div>
-            <div><b>Mouse R</b><span>place block</span></div>
-            <div><b>V</b><span>call / dismiss flock</span></div>
-            <div><b>J</b><span>cycle declaration</span></div>
-            <div><b>H</b><span>declare it</span></div>
-            <div><b>Y</b><span>align with nearest</span></div>
-            <div><b>F</b><span>align with a declaration</span></div>
-            <div><b>G</b><span>roll belly-up</span></div>
-            <div><b>Enter</b><span>chat</span></div>
-            <div><b>T</b><span>switch map / chat</span></div>
-            <div><b>N</b><span>minimise the panel</span></div>
-            <div><b>B</b><span>map zoom</span></div>
-            <div><b>Shift</b><span>sprint</span></div>
-            <div><b>Ctrl / C</b><span>crouch</span></div>
-            <div><b>M</b><span>mute</span></div>
-            <div><b>Esc</b><span>release cursor</span></div>
-          </div>
-        </div>
-
-        <div class="sect">
-          <h3>Play with anyone, anywhere</h3>
-          <div class="lanbox" id="worldBox">
-            <div style="font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)">World code</div>
-            <div id="worldCode" style="font-size:26px;color:var(--core);letter-spacing:.22em">—</div>
-            <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px">
-              <button class="copy" id="hostWorld" style="border-color:var(--ember);color:var(--core)">host a world</button>
-              <input id="joinCode" placeholder="or enter a code"
-                     style="pointer-events:auto;background:#0a0c10;border:1px solid var(--edge);
-                            border-radius:6px;color:var(--core);font:inherit;font-size:12px;
-                            padding:4px 10px;width:150px;text-transform:uppercase" />
-              <button class="copy" id="joinWorld">join</button>
-            </div>
-            <div style="margin-top:10px;display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap">
-              <input id="worldName" placeholder="name your world (optional)"
-                     style="pointer-events:auto;background:#0a0c10;border:1px solid var(--edge);
-                            border-radius:6px;color:var(--core);font:inherit;font-size:11.5px;
-                            padding:4px 10px;width:210px" />
-              <label style="font-size:11px;color:var(--dim);pointer-events:auto;cursor:pointer">
-                <input type="checkbox" id="listWorld" style="pointer-events:auto;accent-color:var(--ember)" />
-                list it publicly
-              </label>
-            </div>
-            <div class="note" id="worldStatus" style="margin-top:10px">—</div>
-          </div>
-
-          <div style="margin-top:16px">
-            <div style="display:flex;align-items:center;gap:10px">
-              <h3 style="flex:1 1 auto;margin:0;border:0;padding:0">Open worlds</h3>
-              <button class="copy" id="refreshLobbies">refresh</button>
-            </div>
-            <div id="lobbyList" style="margin-top:10px"></div>
-          </div>
-          <p class="note">
-            Nothing to set up. Click <b>host a world</b> and you get a link —
-            anyone who opens it is standing in your valley. No install, no
-            account, no downloads, nothing running on your computer. The world
-            lives on Cloudflare's network near you and keeps running whether or
-            not you stay.
-          </p>
-        </div>
-
-        <div class="sect devOnly">
-          <h3>Running your own copy? <span style="color:var(--dim);text-transform:none;letter-spacing:0">LAN play</span></h3>
-          <div class="lanbox">
-            <div style="font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)">Send them this link</div>
-            <a id="lanLink" href="#">—</a>
-            <div><button class="copy" id="copyLan">copy link</button></div>
-          </div>
-          <p class="note">
-            This section only applies if you cloned the repo and are running it
-            locally with <code class="inline">npm run play</code>. Everyone on
-            your wifi who opens the link joins the same valley, and their browser
-            finds your relay automatically. If you are just playing, ignore this
-            — use <b>host a world</b> above instead.
-          </p>
-        </div>
-
-        <div class="sect">
-          <h3>Invite an AI agent to play with you</h3>
-          <p class="note">
-            An AI agent can join your world as a real raptor — it walks, chats,
-            and can hold a stream on a Moloch beside you. This part <em>does</em>
-            need a little setup, because the agent runs on your machine rather
-            than in the browser. Give your agent this config
-            (Claude Code: <code class="inline">~/.claude.json</code>, or run
-            <code class="inline">claude mcp add</code>):
-          </p>
-          <pre class="cfg" id="mcpCfg">—</pre>
-          <button class="copy" id="copyMcp">copy config</button>
-          <p class="note">
-            Then tell your agent: <em>"join the valley, look around, and help me
-            take a Moloch."</em> It gets tools for
-            <code class="inline">join</code>, <code class="inline">look</code>,
-            <code class="inline">move</code>, <code class="inline">say</code>,
-            <code class="inline">beam</code>,
-            <code class="inline">speak_hyperstition</code> and
-            <code class="inline">align</code>.
-            <br /><br />
-            <b>Agents on other machines:</b> set
-            <code class="inline">PHILO_RELAY</code> to
-            <code class="inline" id="relayUrl">—</code> in the config's
-            <code class="inline">env</code> block so they reach your relay
-            instead of their own localhost.
-          </p>
-        </div>
-
-        <button id="play">Enter the valley</button>
-        <div class="note" id="footNote" style="text-align:center">
-          Runs on WebGPU where available — the readout at top-left tells you which.
-          Add <code class="inline">?webgl</code> to the URL to force the fallback.
-        </div>
-      </div>
-    </div>
+    <div id="gate"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

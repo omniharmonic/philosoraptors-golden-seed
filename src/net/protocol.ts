@@ -102,6 +102,8 @@ export interface WireChat {
 
 export type ClientMsg =
   | { t: 'hello'; id: PlayerId; name: string; hue: number; agent?: boolean;
+      /** The landscape this client generated. An empty world adopts it. */
+      seed?: number;
       x?: number; y?: number; z?: number; coherence?: number }
   | { t: 'state'; x: number; y: number; z: number; yaw: number; coherence: number }
   | { t: 'chat'; text: string }

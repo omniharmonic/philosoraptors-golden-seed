@@ -80,20 +80,24 @@ let waterMaterial: THREE.MeshBasicMaterial | null = null;
 
 function materials(atlas: Atlas) {
   if (!opaqueMaterial) {
-    opaqueMaterial = new THREE.MeshBasicMaterial({
+    // unlit(): chunk meshes carry no `normal` attribute, and on WebGPU a lit
+    // basic material would reach for one via the scene's HemisphereLight. See
+    // src/art/unlit.ts. The lighting result is discarded either way, so this
+    // changes no pixels on either backend.
+    opaqueMaterial = unlit(new THREE.MeshBasicMaterial({
       map: atlas.texture,
       vertexColors: true,
       alphaTest: 0.5,
       fog: true,
-    });
-    crossMaterial = new THREE.MeshBasicMaterial({
+    }));
+    crossMaterial = unlit(new THREE.MeshBasicMaterial({
       map: atlas.texture,
       vertexColors: true,
       alphaTest: 0.4,
       side: THREE.DoubleSide,
       fog: true,
-    });
-    waterMaterial = new THREE.MeshBasicMaterial({
+    }));
+    waterMaterial = unlit(new THREE.MeshBasicMaterial({
       map: atlas.texture,
       vertexColors: true,
       transparent: true,
@@ -101,7 +105,7 @@ function materials(atlas: Atlas) {
       depthWrite: false,
       side: THREE.DoubleSide,
       fog: true,
-    });
+    }));
   }
   return {
     opaque: opaqueMaterial!,
